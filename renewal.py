@@ -152,20 +152,40 @@ class XServerGamesRenewal:
                 await Notifier.notify("⚠️ 续期暂停", "检测到邮箱验证码，无法自动输入")
                 return False
 
-            # 关键：如果停在服务器列表页，自动点击“ゲーム管理”进入面板
+            # 关键：多重方式点击“ゲーム管理”按钮
             if "xmgame/game/index" in self.page.url or await self.page.query_selector('text=サーバー一覧'):
-                logger.info("检测到服务器列表页，自动点击【ゲーム管理】进入面板")
+                logger.info("检测到服务器列表页，尝试多种方式点击【ゲーム管理】按钮")
                 await self.shot("05_server_list")
 
-                try:
-                    await self.page.click("text=ゲーム管理", timeout=15000)
-                    await asyncio.sleep(10)
-                    await self.shot("06_entered_panel")
-                    logger.info("🎉 已成功进入服务器管理面板")
-                except Exception as e:
-                    logger.error(f"点击【ゲーム管理】失败: {e}")
-                    await self.shot("07_click_failed")
-                    self.error_message = "无法点击进入面板"
+                clicked = False
+                selectors = [
+                    "text=ゲーム管理",  # 纯文本
+                    "a:has-text('ゲーム管理')",  # a标签内
+                    "td a:has-text('ゲーム管理')",  # 表格内
+                    "button:has-text('ゲーム管理')",  # button标签
+                    "a.button:has-text('ゲーム管理')",  # class button
+                    "//a[contains(text(), 'ゲーム管理')]"  # XPath 备用
+                ]
+
+                for sel in selectors:
+                    try:
+                        if sel.startswith("//"):
+                            await self.page.click(sel, timeout=10000)
+                        else:
+                            await self.page.click(sel, timeout=10000)
+                        await asyncio.sleep(10)
+                        await self.shot("06_entered_panel_success")
+                        logger.info(f"成功使用 selector 点击: {sel}")
+                        clicked = True
+                        break
+                    except Exception as e:
+                        logger.warning(f"selector 失败: {sel} - {e}")
+                        continue
+
+                if not clicked:
+                    logger.error("所有点击方式都失败")
+                    await self.shot("07_all_click_failed")
+                    self.error_message = "无法点击【ゲーム管理】按钮"
                     return False
 
             # 确认是否进入面板
