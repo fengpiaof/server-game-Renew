@@ -22,21 +22,48 @@ def need_renew(remain_hours: float):
 
 
 async def login(page):
-    print("进入 Xserver 统一登录页")
+    print("进入 Xserver 统一登录入口")
     await page.goto("https://secure.xserver.ne.jp/login/", wait_until="domcontentloaded")
 
-    # 邮箱
-    await page.wait_for_selector('input[name="memberid"]')
-    await page.fill('input[name="memberid"]', XS_EMAIL)
+    # 先等 Cloudflare Turnstile 自动放行（最关键）
+    try:
+        await page.wait_for_selector("iframe[src*='challenges.cloudflare.com']", timeout=15000)
+        print("检测到 Cloudflare 验证，等待自动放行...")
+        await page.wait_for_timeout(8000)
+    except:
+        pass
+
+    # 等真正的登录框出现
+    await page.wait_for_selector("input", timeout=30000)
+
+    # 邮箱 / 会员ID（Xserver 这两个任一都会出现）
+    for selector in [
+        'input[name="memberid"]',
+        'input[name="mail"]',
+        'input[type="email"]'
+    ]:
+        try:
+            if await page.locator(selector).count() > 0:
+                await page.fill(selector, XS_EMAIL)
+                break
+        except:
+            pass
 
     # 密码
-    await page.fill('input[name="password"]', XS_PASSWORD)
+    await page.wait_for_selector('input[type="password"]')
+    await page.fill('input[type="password"]', XS_PASSWORD)
 
     # 登录
-    await page.click('button[type="submit"]')
-    await page.wait_for_load_state("networkidle")
+    for btn in ["ログイン", "Login", "submit"]:
+        try:
+            await page.click(f"text={btn}")
+            break
+        except:
+            pass
 
-    print("登录完成，进入面板")
+    await page.wait_for_load_state("networkidle")
+    print("登录成功")
+
 
 
 async def renew_game(page):
