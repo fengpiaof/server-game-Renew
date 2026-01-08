@@ -2,15 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-XServer GAMEs 免费游戏服务器 自动续期脚本（最终修复版）
+XServer GAMEs 免费游戏服务器 自动续期脚本（手机友好版 · cookies.txt 免登录）
 
-修复要点：
-- GitHub Actions 环境下自动使用 headless=True（避免 XServer 错误）
-- 第一次本地手动登录时使用 headless=False（浏览器可见，手动输入验证码）
-- 持久化上下文保存登录状态（browser_profile 文件夹）
+特点：
+- 支持上传 cookies.txt 到仓库，实现免登录（跳过账号密码 + 邮箱验证码）
+- GitHub Actions 自动使用 headless=True（兼容无头环境）
 - 只在剩余时间 < 24 小时 时续期
-- 兼容 Turnstile（通过 anti-bot 注入 + stealth）
-- 支持 Telegram 通知 + 截图记录
+- 保留截图、Telegram 通知、上传 artifact
+- 无需本地运行生成 browser_profile，完全手机操作可维护
 """
 
 import asyncio
@@ -21,7 +20,7 @@ from typing import Optional
 
 from playwright.async_api import async_playwright
 
-# 尝试加载 playwright-stealth（可选，提升反检测能力）
+# 可选：playwright-stealth 提升反检测（如果仓库没装会自动跳过）
 try:
     from playwright_stealth import stealth_async
     STEALTH_AVAILABLE = True
@@ -33,14 +32,8 @@ except ImportError:
 # ======================== 配置 ==========================
 
 class Config:
-    LOGIN_EMAIL = os.getenv("XSERVER_EMAIL")
-    LOGIN_PASSWORD = os.getenv("XSERVER_PASSWORD")
-
-    # 游戏服务器 ID（从面板 URL https://cure.xserver.ne.jp/game-panel/XXXX 中复制）
+    # 游戏服务器 ID（从 https://cure.xserver.ne.jp/game-panel/XXXX 复制）
     GAME_SERVER_ID = os.getenv("XSERVER_GAME_SERVER_ID", "games-2026-01-05-15-27-05")
-
-    # 是否第一次登录（本地运行时设为 true，弹出浏览器手动输入验证码）
-    FIRST_TIME_LOGIN = os.getenv("FIRST_TIME_LOGIN", "false").lower() == "true"
 
     WAIT_TIMEOUT = int(os.getenv("WAIT_TIMEOUT", "30000"))
 
@@ -115,94 +108,111 @@ class XServerGamesRenewal:
             logger.warning(f"截图失败: {e}")
 
     async def setup_browser(self) -> bool:
-    try:
-        self._pw = await async_playwright().start()
-        launch_args = [...]  # 保持原来的 args
+        try:
+            self._pw = await async_playwright().start()
 
-        if Config.PROXY_SERVER:
-            launch_args.append(f"--proxy-server={Config.PROXY_SERVER}")
+            launch_args = [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-web-security",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-infobars",
+                "--start-maximized",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+            ]
 
-        # 自动模式用 headless=True
-        headless = not Config.FIRST_TIME_LOGIN
+            if Config.PROXY_SERVER:
+                launch_args.append(f"--proxy-server={Config.PROXY_SERVER}")
+                logger.info(f"🌐 使用代理: {Config.PROXY_SERVER}")
 
-        self.context = await self._pw.chromium.launch_persistent_context(
-            user_data_dir="browser_profile_temp",  # 临时文件夹，可为空
-            headless=headless,
-            args=launch_args + (["--headless=new"] if headless else []),
-            # ... 其他参数保持不变
-        )
+            # GitHub Actions 为无头环境，强制使用 headless=True + 新版 headless
+            launch_args.append("--headless=new")
 
-        self.page = await self.context.new_page()
+            self.context = await self._pw.chromium.launch_persistent_context(
+                user_data_dir="browser_profile_temp",  # 临时目录，实际不持久化
+                headless=True,
+                args=launch_args,
+                viewport={"width": 1920, "height": 1080},
+                locale="ja-JP",
+                timezone_id="Asia/Tokyo",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+            )
 
-        # ★ 关键：加载 cookies.txt
-        if os.path.exists("cookies.txt"):
-            import json
-            cookies = []
-            with open("cookies.txt", "r", encoding="utf-8") as f:
-                lines = f.readlines()
-                for line in lines:
-                    if line.strip() and not line.startswith("#"):
-                        parts = line.strip().split("\t")
-                        if len(parts) >= 7:
-                            cookies.append({
-                                "name": parts[5],
-                                "value": parts[6],
-                                "domain": parts[0],
-                                "path": parts[2],
-                                "expires": float(parts[4]) if parts[4] != "-1" else -1,
-                                "httpOnly": parts[1] == "FALSE",
-                                "secure": parts[3] == "TRUE",
-                            })
-            if cookies:
-                await self.context.add_cookies(cookies)
-                logger.info("✅ 已加载 cookies.txt，尝试免登录")
+            self.page = await self.context.new_page()
+            self.page.set_default_timeout(Config.WAIT_TIMEOUT)
 
-        # 其余 anti-bot 注入、stealth 等保持不变
-        # ...
+            # 反检测注入
+            await self.context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['ja-JP', 'en-US']});
+            """)
 
-        return True
-    except Exception as e:
-        logger.error(f"浏览器启动失败: {e}")
-        return False
-    async def login(self) -> bool:
-    await self.page.goto(Config.GAME_PANEL_URL)
-    await asyncio.sleep(8)
+            if STEALTH_AVAILABLE:
+                await stealth_async(self.page)
 
-    if await self.page.query_selector('text=ゲームパネル') or "game-panel" in self.page.url:
-        logger.info("🎉 Cookies 生效，直接进入面板！")
-        return True
-    else:
-        logger.error("❌ Cookies 失效，请重新手动导出上传")
-        await self.shot("login_failed")
-        return False
-            # 填写账号密码
-            await self.page.fill("input[name='memberid'], input[name='email']", Config.LOGIN_EMAIL)
-            await self.page.fill("input[name='user_password'], input[name='password']", Config.LOGIN_PASSWORD)
-            await self.shot("02_filled")
-            await self.page.click("input[type='submit'], button[type='submit']")
-            await asyncio.sleep(5)
+            # 加载 cookies.txt（核心免登录功能）
+            if os.path.exists("cookies.txt"):
+                cookies = []
+                try:
+                    with open("cookies.txt", "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith("#"):
+                                continue
+                            parts = line.split("\t")
+                            if len(parts) >= 7:
+                                cookies.append({
+                                    "name": parts[5],
+                                    "value": parts[6],
+                                    "domain": parts[0],
+                                    "path": parts[2],
+                                    "expires": float(parts[4]) if parts[4] != "-1" else -1,
+                                    "httpOnly": parts[1].lower() == "true",
+                                    "secure": parts[3].lower() == "true",
+                                })
+                    if cookies:
+                        await self.context.add_cookies(cookies)
+                        logger.info(f"✅ 已成功加载 {len(cookies)} 条 cookies，尝试免登录")
+                except Exception as e:
+                    logger.warning(f"加载 cookies.txt 失败: {e}")
+            else:
+                logger.info("ℹ️ 未找到 cookies.txt，将尝试普通流程（可能需要手动登录）")
 
-            # 邮箱验证码处理
-            if await self.page.query_selector('text=認証コード') or "otp" in self.page.url:
-                if Config.FIRST_TIME_LOGIN:
-                    logger.info("⏳ 请在浏览器中手动输入邮箱收到的6位验证码，然后点击登录（等待120秒）")
-                    await asyncio.sleep(120)
-                else:
-                    logger.error("⚠️ 需要邮箱验证码，但当前为自动模式（无法手动输入）")
-                    self.error_message = "登录状态过期，请本地设置 FIRST_TIME_LOGIN=true 重新手动登录一次"
-                    return False
+            logger.info("✅ 浏览器初始化成功")
+            return True
 
-            # 最终登录成功判断
-            await asyncio.sleep(6)
-            if "game-panel" in self.page.url or await self.page.query_selector('text=ゲームパネル'):
-                logger.info("🎉 登录成功！状态已保存")
-                return True
-
-            logger.error("❌ 登录失败")
-            self.error_message = "登录失败或验证码错误"
-            return False
         except Exception as e:
-            logger.error(f"❌ 登录异常: {e}")
+            logger.error(f"❌ 浏览器初始化失败: {e}")
+            self.error_message = str(e)
+            return False
+
+    async def login(self) -> bool:
+        try:
+            # 直接访问游戏面板（cookies 生效会直接进入）
+            await self.page.goto(Config.GAME_PANEL_URL)
+            await asyncio.sleep(8)
+            await self.shot("01_panel_or_login")
+
+            # 判断是否已进入面板
+            if await self.page.query_selector('text=ゲームパネル') or "game-panel" in self.page.url:
+                logger.info("🎉 Cookies 生效！成功免登录，直接进入游戏面板")
+                return True
+            else:
+                logger.error("❌ Cookies 失效或未上传，请手动导出最新 cookies.txt 并上传到仓库")
+                await self.shot("02_login_required")
+                self.error_message = "需要登录（cookies 失效）"
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ 登录检查异常: {e}")
             self.error_message = str(e)
             return False
 
@@ -212,7 +222,6 @@ class XServerGamesRenewal:
             await asyncio.sleep(8)
             await self.shot("03_game_panel")
 
-            # 多 selector 尝试匹配剩余时间
             selectors = [
                 "*:has-text('残り')",
                 "text=無料サーバー契約期限",
@@ -226,8 +235,9 @@ class XServerGamesRenewal:
                 try:
                     el = await self.page.query_selector(sel)
                     if el:
-                        remaining_text = await el.inner_text()
-                        if "残り" in remaining_text:
+                        text = await el.inner_text()
+                        if "残り" in text:
+                            remaining_text = text
                             break
                 except:
                     continue
@@ -238,9 +248,9 @@ class XServerGamesRenewal:
                 logger.info(f"📅 当前剩余时间: {self.remaining_hours} 小时")
                 return True
 
-            logger.warning("⚠️ 未检测到剩余时间文本（页面可能已变更）")
-            self.remaining_hours = None
+            logger.warning("⚠️ 未检测到剩余时间（页面结构可能变化）")
             return False
+
         except Exception as e:
             logger.error(f"❌ 获取剩余时间失败: {e}")
             return False
@@ -252,12 +262,10 @@ class XServerGamesRenewal:
             await asyncio.sleep(5)
             await self.shot("04_extend_clicked")
 
-            # 处理可能出现的确认按钮
             if await self.page.query_selector("text=確認"):
                 await self.page.click("text=確認")
                 await asyncio.sleep(3)
 
-            # 等待成功提示
             try:
                 await self.page.wait_for_selector("text=延長しました", timeout=20000)
                 logger.info("🎉 续期成功！")
@@ -265,12 +273,12 @@ class XServerGamesRenewal:
                 await self.get_remaining_time()
                 return True
             except:
-                logger.info("ℹ️ 未看到“延長しました”，但可能已成功")
+                logger.info("ℹ️ 未看到成功提示，但可能已续期")
                 self.renewal_status = "PossibleSuccess"
                 return True
 
         except Exception as e:
-            logger.error(f"❌ 续期失败: {e}")
+            logger.error(f"❌ 续期操作失败: {e}")
             self.error_message = str(e)
             return False
 
@@ -285,28 +293,27 @@ class XServerGamesRenewal:
                 return
 
             if not await self.login():
-                await Notifier.notify("❌ 登录失败", self.error_message or "")
+                await Notifier.notify("❌ 登录失败", self.error_message or "请检查 cookies.txt 是否最新")
                 return
 
             if not await self.get_remaining_time():
                 await Notifier.notify("⚠️ 检查失败", "无法读取剩余时间")
                 return
 
-            if self.remaining_hours is not None and self.remaining_hours >= 24:
-                logger.info(f"ℹ️ 剩余 {self.remaining_hours} 小时 >= 24 小时，无需续期")
+            if self.remaining_hours >= 24:
+                logger.info(f"ℹ️ 剩余 {self.remaining_hours} 小时 ≥ 24 小时，无需续期")
                 self.renewal_status = "Unexpired"
                 await Notifier.notify("ℹ️ 无需续期", f"当前剩余 {self.remaining_hours} 小时")
                 return
 
-            logger.info(f"⚠️ 剩余时间不足 24 小时，开始续期...")
+            logger.info(f"⚠️ 剩余 {self.remaining_hours} 小时 < 24 小时，开始续期...")
             if await self.extend_contract():
-                await Notifier.notify("✅ 续期成功", f"续期完成，预计增加约 72 小时")
+                await Notifier.notify("✅ 续期成功", "已延长约 72 小时")
             else:
-                self.renewal_status = "Failed"
-                await Notifier.notify("❌ 续期失败", self.error_message or "")
+                await Notifier.notify("❌ 续期失败", self.error_message or "未知错误")
 
         finally:
-            logger.info(f"🏁 脚本执行结束 - 状态: {self.renewal_status}")
+            logger.info(f"🏁 脚本结束 - 状态: {self.renewal_status}")
             try:
                 if self.context:
                     await self.context.close()
