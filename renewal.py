@@ -22,12 +22,21 @@ def need_renew(remain_hours: float):
 
 
 async def login(page):
-    print("登录 Xserver Game 面板")
-    await page.goto(GAME_PANEL_URL)
-    await page.fill('input[name="mail"]', XS_EMAIL)
+    print("进入 Xserver 统一登录页")
+    await page.goto("https://secure.xserver.ne.jp/login/", wait_until="domcontentloaded")
+
+    # 邮箱
+    await page.wait_for_selector('input[name="memberid"]')
+    await page.fill('input[name="memberid"]', XS_EMAIL)
+
+    # 密码
     await page.fill('input[name="password"]', XS_PASSWORD)
+
+    # 登录
     await page.click('button[type="submit"]')
     await page.wait_for_load_state("networkidle")
+
+    print("登录完成，进入面板")
 
 
 async def renew_game(page):
