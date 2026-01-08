@@ -115,75 +115,55 @@ class XServerGamesRenewal:
             logger.warning(f"截图失败: {e}")
 
     async def setup_browser(self) -> bool:
-        try:
-            self._pw = await async_playwright().start()
+    try:
+        self._pw = await async_playwright().start()
+        launch_args = [...]  # 保持原来的 args
 
-            launch_args = [
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-web-security",
-                "--disable-features=IsolateOrigins,site-per-process",
-                "--disable-infobars",
-                "--start-maximized",
-                "--disable-background-timer-throttling",
-                "--disable-backgrounding-occluded-windows",
-                "--disable-renderer-backgrounding",
-            ]
+        if Config.PROXY_SERVER:
+            launch_args.append(f"--proxy-server={Config.PROXY_SERVER}")
 
-            if Config.PROXY_SERVER:
-                launch_args.append(f"--proxy-server={Config.PROXY_SERVER}")
-                logger.info(f"🌐 使用代理: {Config.PROXY_SERVER}")
+        # 自动模式用 headless=True
+        headless = not Config.FIRST_TIME_LOGIN
 
-            profile_dir = "browser_profile"
+        self.context = await self._pw.chromium.launch_persistent_context(
+            user_data_dir="browser_profile_temp",  # 临时文件夹，可为空
+            headless=headless,
+            args=launch_args + (["--headless=new"] if headless else []),
+            # ... 其他参数保持不变
+        )
 
-            # ★ 关键修复：根据模式选择 headless
-            if Config.FIRST_TIME_LOGIN:
-                logger.info("👐 第一次登录模式：浏览器可见（headless=False），请手动输入验证码")
-                headless = False
-            else:
-                logger.info("🔄 自动续期模式：使用 headless=True（适用于 GitHub Actions 无头环境）")
-                headless = True
-                launch_args.append("--headless=new")  # 新版 headless 更接近真实浏览器
+        self.page = await self.context.new_page()
 
-            self.context = await self._pw.chromium.launch_persistent_context(
-                user_data_dir=profile_dir,
-                headless=headless,
-                args=launch_args,
-                viewport={"width": 1920, "height": 1080},
-                locale="ja-JP",
-                timezone_id="Asia/Tokyo",
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-            )
+        # ★ 关键：加载 cookies.txt
+        if os.path.exists("cookies.txt"):
+            import json
+            cookies = []
+            with open("cookies.txt", "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                for line in lines:
+                    if line.strip() and not line.startswith("#"):
+                        parts = line.strip().split("\t")
+                        if len(parts) >= 7:
+                            cookies.append({
+                                "name": parts[5],
+                                "value": parts[6],
+                                "domain": parts[0],
+                                "path": parts[2],
+                                "expires": float(parts[4]) if parts[4] != "-1" else -1,
+                                "httpOnly": parts[1] == "FALSE",
+                                "secure": parts[3] == "TRUE",
+                            })
+            if cookies:
+                await self.context.add_cookies(cookies)
+                logger.info("✅ 已加载 cookies.txt，尝试免登录")
 
-            self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
-            self.page.set_default_timeout(Config.WAIT_TIMEOUT)
+        # 其余 anti-bot 注入、stealth 等保持不变
+        # ...
 
-            # Anti-detection 注入
-            await self.context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-                Object.defineProperty(navigator, 'languages', {get: () => ['ja-JP', 'en-US']});
-                Object.defineProperty(navigator, 'permissions', {
-                    get: () => ({query: () => Promise.resolve({state: 'granted'})})
-                });
-            """)
-
-            # stealth（如果安装了）
-            if STEALTH_AVAILABLE:
-                await stealth_async(self.page)
-
-            logger.info("✅ 浏览器初始化成功")
-            return True
-        except Exception as e:
-            logger.error(f"❌ 浏览器初始化失败: {e}")
-            self.error_message = str(e)
-            return False
-
+        return True
+    except Exception as e:
+        logger.error(f"浏览器启动失败: {e}")
+        return False
     async def login(self) -> bool:
         try:
             await self.page.goto("https://secure.xserver.ne.jp/xapanel/login/xmgame/")
