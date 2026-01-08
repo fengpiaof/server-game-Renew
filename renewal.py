@@ -161,17 +161,35 @@ class XServerGamesRenewal:
 
                 # 增强的 selector 列表（优先表格内元素）
                 selectors = [
+                    # 优先：表单提交按钮（最可能的情况）
+                    "input[type='submit'][value='ゲーム管理']",
+                    "button[type='submit']:has-text('ゲーム管理')",
+                    "input[value='ゲーム管理']",
+                    "button:has-text('ゲーム管理')",
+
+                    # 表格内常见
+                    "td >> text=ゲーム管理", 
+                    "td:has-text('ゲーム管理') >> input",
+                    "td:has-text('ゲーム管理') >> button",
                     "td:has-text('ゲーム管理') >> a",
-                    "td a:has-text('ゲーム管理')",
-                    "table a:has-text('ゲーム管理')",
-                    "a.button:has-text('ゲーム管理')",
+                    "table input[value*='ゲーム管理']",
+                    "table button:has-text('ゲーム管理')",
+
+                    # 宽松匹配（包含游戏管理的单元格里的任何可点击元素）
+                    "td:has-text('ゲーム管理') >> [role=button]",
+                    "td:has-text('ゲーム管理') >> clickable",
+
+                    # 老的备用
                     "a:has-text('ゲーム管理')",
                     "text=ゲーム管理",
-                    "button:has-text('ゲーム管理')",
                     "a:has-text('ゲーム管理') >> nth=0",
-                    "//td[contains(., 'ゲーム管理')]//a",
-                    "//a[contains(text(), 'ゲーム管理')]",
+
+                    # XPath 终极备用
+                    "//td[contains(., 'ゲーム管理')]//input",
+                    "//td[contains(., 'ゲーム管理')]//button",
+                    "//input[contains(@value, 'ゲーム管理')]",
                     "//button[contains(text(), 'ゲーム管理')]",
+                    "//td[contains(., 'ゲーム管理')]//a",
                 ]
 
                 clicked = False
@@ -183,7 +201,7 @@ class XServerGamesRenewal:
                         else:
                             await self.page.click(sel, timeout=15000)
 
-                        await asyncio.sleep(12)  # 点击后多等一会儿跳转
+                        await asyncio.sleep(18)  # 点击后多等一会儿跳转
                         await self.shot(f"06_clicked_selector_{i+1}")
 
                         # 判断是否成功进入面板
