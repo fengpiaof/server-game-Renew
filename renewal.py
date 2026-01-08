@@ -1,119 +1,71 @@
+import asyncio
 import re
-import time
 import os
-from playwright.sync_api import sync_playwright, TimeoutError
+from playwright.async_api import async_playwright
 
-XSERVER_ID = os.getenv("XSERVER_ID")
-XSERVER_PASSWORD = os.getenv("XSERVER_PASSWORD")
+XS_EMAIL = os.getenv("XS_EMAIL")
+XS_PASSWORD = os.getenv("XS_PASSWORD")
 
-GAME_URL = "secure.xserver.ne.jp/xapanel/login/xmgame"
+GAME_PANEL_URL = "https://secure.xserver.ne.jp/xapanel/login/xmgame"
 
-RENEW_THRESHOLD_HOURS = 24
+def parse_game_time(text: str):
+    h = re.search(r'(\d+)時間', text)
+    m = re.search(r'(\d+)分', text)
 
-
-def log(msg):
-    print(f"[XSERVER-GAME] {msg}", flush=True)
-
-
-def parse_remaining_hours(text: str) -> int:
-    """
-    从 '残り 79時間8分' 中解析小时
-    """
-    m = re.search(r"残り\s*(\d+)時間", text)
-    if not m:
-        return 999
-    return int(m.group(1))
+    hours = int(h.group(1)) if h else 0
+    minutes = int(m.group(1)) if m else 0
+    return hours + minutes / 60
 
 
-def login(page):
-    log("访问 Xserver Game 面板")
-    page.goto(GAME_URL, timeout=60000)
-
-    # 已登录直接返回
-    if "ゲームサーバー" in page.content():
-        log("已登录")
-        return
-
-    log("开始登录")
-    page.wait_for_selector('input[name="account"]', timeout=60000)
-
-    page.fill('input[name="account"]', XSERVER_ID)
-    page.fill('input[name="password"]', XSERVER_PASSWORD)
-
-    page.click('button[type="submit"]')
-
-    # 等待登录完成
-    page.wait_for_load_state("networkidle", timeout=60000)
-    time.sleep(3)
+def need_renew(remain_hours: float):
+    return remain_hours < 24
 
 
-def goto_game_panel(page):
-    log("进入游戏服务器管理页")
-    page.goto(GAME_URL, timeout=60000)
-    page.wait_for_selector("text=Minecraft", timeout=60000)
+async def login(page):
+    print("登录 Xserver Game 面板")
+    await page.goto(GAME_PANEL_URL)
+    await page.fill('input[name="mail"]', XS_EMAIL)
+    await page.fill('input[name="password"]', XS_PASSWORD)
+    await page.click('button[type="submit"]')
+    await page.wait_for_load_state("networkidle")
 
 
-def get_remaining_hours(page) -> int:
-    log("读取剩余时间")
+async def renew_game(page):
+    print("执行续期流程")
 
-    locator = page.locator("text=残り").first
-    locator.wait_for(timeout=30000)
+    await page.click("text=アップグレード・期限延長")
+    await page.wait_for_load_state("networkidle")
 
-    text = locator.text_content()
-    log(f"期限文本: {text}")
+    # 下一步 / 确认
+    for btn in ["次へ", "申し込む", "更新", "確認"]:
+        try:
+            await page.click(f"text={btn}", timeout=3000)
+            break
+        except:
+            pass
 
-    hours = parse_remaining_hours(text)
-    log(f"剩余小时: {hours}")
-    return hours
-
-
-def renew_game_server(page):
-    log("尝试延期")
-
-    # 点击「アップグレード・期限延長」
-    page.click("text=アップグレード・期限延長")
-    time.sleep(2)
-
-    # 有的页面会有确认
-    try:
-        page.click("text=確認", timeout=5000)
-    except TimeoutError:
-        pass
-
-    time.sleep(3)
-    log("延期操作完成（请人工确认是否成功）")
+    await page.wait_for_timeout(4000)
+    print("续期完成")
 
 
-def main():
-    if not XSERVER_ID or not XSERVER_PASSWORD:
-        raise RuntimeError("请设置环境变量 XSERVER_ID / XSERVER_PASSWORD")
+async def main():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        await login(page)
 
-        context = browser.new_context(
-            locale="ja-JP",
-            timezone_id="Asia/Tokyo",
-        )
+        time_text = await page.locator("text=/残り.*時間/").inner_text()
+        remain_hours = parse_game_time(time_text)
+        print("服务器剩余小时:", remain_hours)
 
-        page = context.new_page()
-
-        login(page)
-        goto_game_panel(page)
-
-        hours = get_remaining_hours(page)
-
-        if hours <= RENEW_THRESHOLD_HOURS:
-            renew_game_server(page)
+        if need_renew(remain_hours):
+            await renew_game(page)
         else:
-            log("未到可延期时间，退出")
+            print("剩余时间充足，跳过")
 
-        time.sleep(5)
-        browser.close()
+        await browser.close()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
