@@ -64,6 +64,10 @@ async def main():
 
         await login(page)
 
+        # 👇 新增这两行
+        await page.goto("https://cure.xserver.ne.jp/game/")
+        await page.wait_for_load_state("networkidle")
+
         time_text = await page.locator("text=/残り.*時間/").inner_text()
         remain_hours = parse_game_time(time_text)
         print("服务器剩余小时:", remain_hours)
@@ -74,6 +78,7 @@ async def main():
             print("剩余时间充足，跳过")
 
         await browser.close()
+
 
 
 if __name__ == "__main__":
