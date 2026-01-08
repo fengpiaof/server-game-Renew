@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-XServer GAMEs 免费游戏服务器 自动续期脚本（无直接URL版）
+XServer GAMEs 免费游戏服务器 自动续期脚本（增强点击版）
 - 账号密码登录
-- 服务器列表页自动点击【ゲーム管理】按钮（增强版）
+- 服务器列表页自动点击【ゲーム管理】按钮（超级加强 selectors）
 - 只在剩余时间 < 24 小时 时续期
 - GitHub Actions 完全兼容
 - 详细截图 + Telegram 通知 + Artifact 上传
@@ -150,58 +150,62 @@ class XServerGamesRenewal:
                 logger.info("已进入服务器列表页，准备点击【ゲーム管理】按钮")
                 await self.shot("05_server_list_loaded")
 
+                # 打印页面部分 HTML 调试
+                try:
+                    table_html = await self.page.inner_html("table", timeout=10000)
+                    logger.info(f"表格 HTML 片段 (前500字): {table_html[:500]}")
+                except:
+                    logger.warning("无法获取表格 HTML")
+
                 # 等待页面完全加载
                 try:
-                    await self.page.wait_for_selector("table", timeout=25000)
-                    await self.page.wait_for_load_state("networkidle", timeout=30000)
+                    await self.page.wait_for_selector("table", timeout=30000)
+                    await self.page.wait_for_load_state("networkidle", timeout=40000)
                 except:
                     logger.warning("表格等待超时，继续尝试点击")
 
-                await asyncio.sleep(6)  # 保险延迟
+                await asyncio.sleep(8)  # 更长保险延迟
 
-                # 增强的 selector 列表（优先表格内元素）
+                # 超级加强 selectors（优先表单 input/button）
                 selectors = [
-                    # 优先：表单提交按钮（最可能的情况）
+                    # 优先匹配表单提交（最可能）
                     "input[type='submit'][value='ゲーム管理']",
-                    "button[type='submit']:has-text('ゲーム管理')",
                     "input[value='ゲーム管理']",
+                    "button[type='submit']:has-text('ゲーム管理')",
                     "button:has-text('ゲーム管理')",
 
-                    # 表格内常见
-                    "td >> text=ゲーム管理", 
+                    # 表格内 input/button/a
+                    "td >> input[value='ゲーム管理']",
+                    "td >> button:has-text('ゲーム管理')",
                     "td:has-text('ゲーム管理') >> input",
                     "td:has-text('ゲーム管理') >> button",
                     "td:has-text('ゲーム管理') >> a",
                     "table input[value*='ゲーム管理']",
                     "table button:has-text('ゲーム管理')",
 
-                    # 宽松匹配（包含游戏管理的单元格里的任何可点击元素）
-                    "td:has-text('ゲーム管理') >> [role=button]",
-                    "td:has-text('ゲーム管理') >> clickable",
-
-                    # 老的备用
+                    # 宽松匹配
+                    "[role='button']:has-text('ゲーム管理')",
+                    "text=ゲーム管理 >> clickable",
                     "a:has-text('ゲーム管理')",
-                    "text=ゲーム管理",
                     "a:has-text('ゲーム管理') >> nth=0",
 
-                    # XPath 终极备用
-                    "//td[contains(., 'ゲーム管理')]//input",
-                    "//td[contains(., 'ゲーム管理')]//button",
+                    # XPath 终极
                     "//input[contains(@value, 'ゲーム管理')]",
                     "//button[contains(text(), 'ゲーム管理')]",
+                    "//td[contains(., 'ゲーム管理')]//input",
+                    "//td[contains(., 'ゲーム管理')]//button",
                     "//td[contains(., 'ゲーム管理')]//a",
+                    "//a[contains(text(), 'ゲーム管理')]",
                 ]
 
                 clicked = False
                 for i, sel in enumerate(selectors):
                     try:
                         logger.info(f"尝试点击 selector {i+1}/{len(selectors)}: {sel}")
-                        if sel.startswith("//"):
-                            await self.page.click(sel, timeout=15000)
-                        else:
-                            await self.page.click(sel, timeout=15000)
+                        locator = self.page.locator(sel).first
+                        await locator.click(timeout=20000)
 
-                        await asyncio.sleep(18)  # 点击后多等一会儿跳转
+                        await asyncio.sleep(15)  # 更长等待跳转
                         await self.shot(f"06_clicked_selector_{i+1}")
 
                         # 判断是否成功进入面板
@@ -217,7 +221,7 @@ class XServerGamesRenewal:
                     logger.error("❌ 所有点击方式均失败")
                     await self.shot("07_all_click_failed")
                     self.error_message = "无法点击【ゲーム管理】按钮，请检查页面结构是否变动"
-                    await Notifier.notify("❌ 进入面板失败", "所有点击方式无效，请手动查看最新截图")
+                    await Notifier.notify("❌ 进入面板失败", "所有点击方式无效，请手动查看最新截图和日志中的表格 HTML")
                     return False
 
             # 最终确认进入面板
