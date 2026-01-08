@@ -172,7 +172,9 @@ class XServerGamesRenewal:
 
                 try:
                     # 点击表格中第一个“管理”链接（常见 selector）
-                    await self.page.click("table a:has-text('管理')", timeout=15000)
+                    await self.page.click("td a:has-text('ゲーム管理')", timeout=15000)
+                    # 或
+                    await self.page.click("a.button:has-text('ゲーム管理')", timeout=15000)
                     await asyncio.sleep(10)
                     await self.shot("06_entered_panel")
                     logger.info("已成功进入服务器面板")
