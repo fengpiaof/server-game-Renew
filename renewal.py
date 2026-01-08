@@ -148,7 +148,6 @@ class XServerGamesRenewal:
             await asyncio.sleep(4)
             await self.shot("01_login_page")
 
-            # 填写账号密码
             await self.page.fill("input[name='memberid'], input[name='email']", Config.LOGIN_EMAIL)
             await self.page.fill("input[name='user_password'], input[name='password']", Config.LOGIN_PASSWORD)
             await self.shot("02_credentials_filled")
@@ -157,25 +156,39 @@ class XServerGamesRenewal:
             await asyncio.sleep(10)
             await self.shot("03_after_submit")
 
-            # 检测邮箱验证码页面
+            # 检测邮箱验证码
             if (await self.page.query_selector('text=認証コード') or 
-                await self.page.query_selector('text=認証コードを入力') or
-                "otp" in self.page.url):
-                logger.warning("⚠️ 检测到邮箱验证码页面")
+                await self.page.query_selector('text=認証コードを入力')):
+                logger.warning("⚠️ 检测到邮箱验证码")
                 await self.shot("04_otp_page")
-                self.error_message = "需要邮箱验证码（请关闭账号设置中的“不審なログイン時の認証”）"
-                await Notifier.notify("⚠️ 续期暂停", "检测到邮箱验证码，无法自动输入\n请去 XServer 账号设置关闭“不審なログイン時の認証”")
+                self.error_message = "需要邮箱验证码，请关闭“不審なログイン時の認証”"
+                await Notifier.notify("⚠️ 续期暂停", "检测到邮箱验证码，无法自动输入")
                 return False
 
-            # 检查是否成功进入面板
+            # 如果进入服务器列表页，自动点击第一个服务器的“管理”按钮
+            if "xmgame/game/index" in self.page.url or await self.page.query_selector('text=サーバー一覧'):
+                logger.info("检测到服务器列表页，自动点击第一个服务器进入面板")
+                await self.shot("05_server_list")
+
+                try:
+                    # 点击表格中第一个“管理”链接（常见 selector）
+                    await self.page.click("table a:has-text('管理')", timeout=15000)
+                    await asyncio.sleep(10)
+                    await self.shot("06_entered_panel")
+                    logger.info("已成功进入服务器面板")
+                except Exception as e:
+                    logger.error(f"自动点击管理按钮失败: {e}")
+                    await self.shot("07_click_failed")
+                    self.error_message = "找到服务器列表但无法点击进入面板"
+                    return False
+
+            # 最终检查是否在面板页
             if "game-panel" in self.page.url or await self.page.query_selector('text=ゲームパネル'):
-                logger.info("🎉 登录成功")
-                await self.shot("05_logged_in")
+                logger.info("🎉 成功进入游戏服务器面板")
                 return True
 
-            logger.error("❌ 登录失败（可能密码错误或页面变化）")
-            await self.shot("06_login_failed")
-            self.error_message = "登录失败"
+            logger.error("❌ 未进入面板页")
+            await self.shot("08_not_in_panel")
             return False
 
         except Exception as e:
