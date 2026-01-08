@@ -152,56 +152,74 @@ class XServerGamesRenewal:
                 await Notifier.notify("⚠️ 续期暂停", "检测到邮箱验证码，无法自动输入")
                 return False
 
-            # 关键：多重方式点击“ゲーム管理”按钮
+            # 关键：增强点击“ゲーム管理”按钮
             if "xmgame/game/index" in self.page.url or await self.page.query_selector('text=サーバー一覧'):
-                logger.info("检测到服务器列表页，尝试多种方式点击【ゲーム管理】按钮")
-                await self.shot("05_server_list")
+                logger.info("已进入服务器列表页，准备点击【ゲーム管理】按钮")
+                await self.shot("05_server_list_loaded")
+
+                # 先等待表格完全加载（保险）
+                await self.page.wait_for_selector("table", timeout=20000)
+                await self.page.wait_for_load_state("networkidle", timeout=30000)
+                await asyncio.sleep(5)  # 额外延迟，防动态渲染
 
                 clicked = False
+
+                # 加强 selector 列表（从常见到罕见）
                 selectors = [
-                    "text=ゲーム管理",  # 纯文本
-                    "a:has-text('ゲーム管理')",  # a标签内
-                    "td a:has-text('ゲーム管理')",  # 表格内
-                    "button:has-text('ゲーム管理')",  # button标签
-                    "a.button:has-text('ゲーム管理')",  # class button
-                    "//a[contains(text(), 'ゲーム管理')]"  # XPath 备用
+                    # 最常见的：表格中的按钮或链接
+                    "td:has-text('ゲーム管理') >> a", 
+                    "td a:has-text('ゲーム管理')",
+                    "table a:has-text('ゲーム管理')",
+                    "a.button:has-text('ゲーム管理')",
+
+                    # 纯文本匹配
+                    "text=ゲーム管理",
+                    "a:has-text('ゲーム管理')",
+
+                    # 带属性的按钮
+                    "button:has-text('ゲーム管理')",
+                    "input[type='button']:has-text('ゲーム管理')",
+
+                    # XPath 备用（更精确匹配表格行）
+                    "//td[contains(., 'ゲーム管理')]//a",
+                    "//a[contains(text(), 'ゲーム管理')]",
+                    "//button[contains(text(), 'ゲーム管理')]",
+
+                    # 如果有多个服务器，取第一个匹配的
+                    "a:has-text('ゲーム管理') >> nth=0",
                 ]
 
-                for sel in selectors:
+                for i, sel in enumerate(selectors):
                     try:
+                        logger.info(f"尝试 selector {i+1}: {sel}")
                         if sel.startswith("//"):
-                            await self.page.click(sel, timeout=10000)
+                            await self.page.click(sel, timeout=15000)
                         else:
-                            await self.page.click(sel, timeout=10000)
-                        await asyncio.sleep(10)
-                        await self.shot("06_entered_panel_success")
-                        logger.info(f"成功使用 selector 点击: {sel}")
-                        clicked = True
-                        break
+                            await self.page.click(sel, timeout=15000)
+
+                        await asyncio.sleep(10)  # 点击后等页面跳转
+                        await self.shot(f"06_clicked_with_selector_{i}")
+
+                        if "game-panel" in self.page.url or await self.page.query_selector('text=アップグレード・期限延長'):
+                            logger.info(f"✅ 成功点击进入面板！使用 selector: {sel}")
+                            clicked = True
+                            break
                     except Exception as e:
-                        logger.warning(f"selector 失败: {sel} - {e}")
+                        logger.warning(f"selector {sel} 失败: {str(e)[:100]}")
                         continue
 
                 if not clicked:
-                    logger.error("所有点击方式都失败")
-                    await self.shot("07_all_click_failed")
-                    self.error_message = "无法点击【ゲーム管理】按钮"
+                    logger.error("❌ 所有 selector 都失败，无法点击【ゲーム管理】")
+                    await self.shot("07_all_selectors_failed")
+                    self.error_message = "无法自动点击【ゲーム管理】按钮，可能页面布局变动"
+                    await Notifier.notify("❌ 进入面板失败", "所有点击方式无效，请检查最新页面结构")
                     return False
 
-            # 确认是否进入面板
-            if "game-panel" in self.page.url:
+            # 确认进入面板
+            if "game-panel" in self.page.url or await self.page.query_selector('text=アップグレード・期限延長'):
                 logger.info("🎉 成功进入游戏服务器面板")
+                await self.shot("08_panel_entered")
                 return True
-
-            logger.error("❌ 未进入面板页")
-            await self.shot("08_still_list")
-            return False
-
-        except Exception as e:
-            logger.error(f"❌ 登录过程异常: {e}")
-            await self.shot("error_login")
-            self.error_message = str(e)
-            return False
 
     async def get_remaining_time(self) -> bool:
         try:
