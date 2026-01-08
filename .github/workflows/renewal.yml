@@ -1,24 +1,31 @@
-name: Xserver Game Auto Renew
+name: XServer GAMEs 自动延期
 
 on:
   schedule:
-    - cron: "0 */3 * * *"
-  workflow_dispatch:
+    - cron: '0 */6 * * *'  # 每6小时运行一次（UTC时间，根据需要调整）
+  workflow_dispatch:  # 支持手动触发
 
 jobs:
   renew:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install deps
+      
+      - name: Install dependencies
         run: |
-          pip install playwright
-          playwright install chromium
-
-      - name: Run renew
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+      
+      - name: Run renewal
+        env:
+          XSERVER_EMAIL: ${{ secrets.XSERVER_EMAIL }}
+          XSERVER_PASSWORD: ${{ secrets.XSERVER_PASSWORD }}
+          # 如果需要服务器ID或其他，添加环境变量
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python renewal.py
