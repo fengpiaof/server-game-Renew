@@ -1,32 +1,24 @@
-name: Xserver Games Auto Renew
+name: Xserver Game Auto Renew
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 */3 * * *"
   workflow_dispatch:
 
 jobs:
   renew:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install Python deps
+      - name: Install deps
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m playwright install chromium
+          pip install playwright
+          playwright install chromium
 
-      - name: Run Xserver Games Auto Renew
-        env:
-          XS_EMAIL: ${{ secrets.XS_EMAIL }}
-          XS_PASSWORD: ${{ secrets.XS_PASSWORD }}
-        run: |
-          python renewal.py
+      - name: Run renew
+        run: python renewal.py
