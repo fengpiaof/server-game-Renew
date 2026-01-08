@@ -165,16 +165,16 @@ class XServerGamesRenewal:
         logger.error(f"浏览器启动失败: {e}")
         return False
     async def login(self) -> bool:
-        try:
-            await self.page.goto("https://secure.xserver.ne.jp/xapanel/login/xmgame/")
-            await asyncio.sleep(3)
-            await self.shot("01_login_page")
+    await self.page.goto(Config.GAME_PANEL_URL)
+    await asyncio.sleep(8)
 
-            # 已登录判断
-            if "game-panel" in self.page.url or await self.page.query_selector('text=ゲームパネル'):
-                logger.info("🎉 检测到已登录状态，跳过登录流程")
-                return True
-
+    if await self.page.query_selector('text=ゲームパネル') or "game-panel" in self.page.url:
+        logger.info("🎉 Cookies 生效，直接进入面板！")
+        return True
+    else:
+        logger.error("❌ Cookies 失效，请重新手动导出上传")
+        await self.shot("login_failed")
+        return False
             # 填写账号密码
             await self.page.fill("input[name='memberid'], input[name='email']", Config.LOGIN_EMAIL)
             await self.page.fill("input[name='user_password'], input[name='password']", Config.LOGIN_PASSWORD)
