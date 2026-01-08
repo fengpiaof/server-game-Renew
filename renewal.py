@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-XServer GAMEs 免费游戏服务器 自动续期脚本（最终版）
-
+XServer GAMEs 免费游戏服务器 自动续期脚本（最终稳定版）
 - 账号密码登录（最稳定）
-- 登录后自动从列表页点击“ゲーム管理”进入面板
+- 增强点击【ゲーム管理】按钮逻辑
 - 只在剩余时间 < 24 小时 时续期
 - GitHub Actions 完全兼容
-- 详细截图 + Telegram 通知 + Artifact 上传（即使失败也能看到哪里卡住）
+- 详细截图 + Telegram 通知 + Artifact 上传
 """
 
 import asyncio
@@ -31,15 +30,14 @@ except ImportError:
 class Config:
     LOGIN_EMAIL = os.getenv("XSERVER_EMAIL")
     LOGIN_PASSWORD = os.getenv("XSERVER_PASSWORD")
-    GAME_SERVER_ID = os.getenv("XSERVER_GAME_SERVER_ID")
+    GAME_SERVER_ID = os.getenv("XSERVER_GAME_SERVER_ID")  # 可选，用于尝试直接URL
 
     WAIT_TIMEOUT = int(os.getenv("WAIT_TIMEOUT", "60000"))
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-    if not GAME_SERVER_ID:
-        raise ValueError("请设置 XSERVER_GAME_SERVER_ID 环境变量")
-    GAME_PANEL_URL = f"https://cure.xserver.ne.jp/game-panel/{GAME_SERVER_ID}"
+    # 尝试构造直接面板URL（如果ID正确且格式支持的话）
+    GAME_PANEL_URL = f"https://cure.xserver.ne.jp/game-panel/{GAME_SERVER_ID}" if GAME_SERVER_ID else None
 
 
 # ======================== 日志 & 通知 ==========================
@@ -83,7 +81,6 @@ class XServerGamesRenewal:
         self.page = None
         self.browser = None
         self._pw = None
-        self.renewal_status = "Unknown"
         self.remaining_hours: Optional[int] = None
         self.error_message: Optional[str] = None
 
@@ -93,7 +90,7 @@ class XServerGamesRenewal:
                 await self.page.screenshot(path=f"{name}.png", full_page=True)
                 logger.info(f"📸 已保存截图: {name}.png")
             except Exception as e:
-                logger.warning(f"截图失败: {e}")
+                logger.warning(f"截图失败 {name}: {e}")
 
     async def setup_browser(self) -> bool:
         try:
@@ -152,56 +149,58 @@ class XServerGamesRenewal:
                 await Notifier.notify("⚠️ 续期暂停", "检测到邮箱验证码，无法自动输入")
                 return False
 
-            # 关键：增强点击“ゲーム管理”按钮
+            # 尝试直接跳转面板URL（如果配置了ID且有效）
+            if Config.GAME_PANEL_URL:
+                logger.info("尝试直接跳转面板URL")
+                await self.page.goto(Config.GAME_PANEL_URL, wait_until="networkidle", timeout=30000)
+                await asyncio.sleep(8)
+                await self.shot("05_direct_url_attempt")
+                if "game-panel" in self.page.url:
+                    logger.info("🎉 直接URL成功进入面板")
+                    return True
+
+            # 服务器列表页 → 点击【ゲーム管理】
             if "xmgame/game/index" in self.page.url or await self.page.query_selector('text=サーバー一覧'):
                 logger.info("已进入服务器列表页，准备点击【ゲーム管理】按钮")
-                await self.shot("05_server_list_loaded")
+                await self.shot("06_server_list_loaded")
 
-                # 先等待表格完全加载（保险）
-                await self.page.wait_for_selector("table", timeout=20000)
-                await self.page.wait_for_load_state("networkidle", timeout=30000)
-                await asyncio.sleep(5)  # 额外延迟，防动态渲染
+                # 等待表格加载完成
+                try:
+                    await self.page.wait_for_selector("table", timeout=20000)
+                    await self.page.wait_for_load_state("networkidle", timeout=30000)
+                except:
+                    logger.warning("表格等待超时，继续尝试点击")
 
-                clicked = False
+                await asyncio.sleep(5)
 
-                # 加强 selector 列表（从常见到罕见）
                 selectors = [
-                    # 最常见的：表格中的按钮或链接
-                    "td:has-text('ゲーム管理') >> a", 
+                    "td:has-text('ゲーム管理') >> a",
                     "td a:has-text('ゲーム管理')",
                     "table a:has-text('ゲーム管理')",
                     "a.button:has-text('ゲーム管理')",
-
-                    # 纯文本匹配
                     "text=ゲーム管理",
                     "a:has-text('ゲーム管理')",
-
-                    # 带属性的按钮
                     "button:has-text('ゲーム管理')",
-                    "input[type='button']:has-text('ゲーム管理')",
-
-                    # XPath 备用（更精确匹配表格行）
+                    "a:has-text('ゲーム管理') >> nth=0",
                     "//td[contains(., 'ゲーム管理')]//a",
                     "//a[contains(text(), 'ゲーム管理')]",
                     "//button[contains(text(), 'ゲーム管理')]",
-
-                    # 如果有多个服务器，取第一个匹配的
-                    "a:has-text('ゲーム管理') >> nth=0",
                 ]
 
+                clicked = False
                 for i, sel in enumerate(selectors):
                     try:
-                        logger.info(f"尝试 selector {i+1}: {sel}")
+                        logger.info(f"尝试点击 selector {i+1}/{len(selectors)}: {sel}")
                         if sel.startswith("//"):
                             await self.page.click(sel, timeout=15000)
                         else:
                             await self.page.click(sel, timeout=15000)
 
-                        await asyncio.sleep(10)  # 点击后等页面跳转
-                        await self.shot(f"06_clicked_with_selector_{i}")
+                        await asyncio.sleep(10)
+                        await self.shot(f"07_clicked_selector_{i+1}")
 
                         if "game-panel" in self.page.url or await self.page.query_selector('text=アップグレード・期限延長'):
-                            logger.info(f"✅ 成功点击进入面板！使用 selector: {sel}")
+                            logger.info(f"✅ 成功进入面板！使用 selector: {sel}")
                             clicked = True
                             break
                     except Exception as e:
@@ -209,33 +208,44 @@ class XServerGamesRenewal:
                         continue
 
                 if not clicked:
-                    logger.error("❌ 所有 selector 都失败，无法点击【ゲーム管理】")
-                    await self.shot("07_all_selectors_failed")
-                    self.error_message = "无法自动点击【ゲーム管理】按钮，可能页面布局变动"
-                    await Notifier.notify("❌ 进入面板失败", "所有点击方式无效，请检查最新页面结构")
+                    logger.error("❌ 所有点击方式均失败")
+                    await self.shot("08_all_click_failed")
+                    self.error_message = "无法点击【ゲーム管理】按钮，可能页面结构变动"
+                    await Notifier.notify("❌ 进入面板失败", "所有点击方式无效，请手动检查最新页面")
                     return False
 
-            # 确认进入面板
+            # 最终确认是否进入面板
             if "game-panel" in self.page.url or await self.page.query_selector('text=アップグレード・期限延長'):
                 logger.info("🎉 成功进入游戏服务器面板")
-                await self.shot("08_panel_entered")
+                await self.shot("09_panel_entered")
                 return True
+            else:
+                logger.error("❌ 未检测到面板页面特征")
+                await self.shot("10_still_not_panel")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ 登录过程异常: {e}")
+            await self.shot("error_login")
+            self.error_message = str(e)
+            return False
 
     async def get_remaining_time(self) -> bool:
         try:
-            # 已进入面板，无需再次 goto
             await asyncio.sleep(5)
-            await self.shot("09_game_panel_loaded")
+            await self.shot("11_panel_loaded")
 
             selectors = [
                 "*:has-text('残り')",
                 "text=無料サーバー契約期限",
                 "div:has-text('時間')",
+                "text=/残り.*時間/",
             ]
 
             for sel in selectors:
                 try:
-                    text = await self.page.inner_text(sel, timeout=10000)
+                    text = await self.page.inner_text(sel, timeout=15000)
+                    logger.info(f"找到文本: {text[:200]}")
                     match = re.search(r'残り\s*(\d+)\s*時間', text)
                     if match:
                         self.remaining_hours = int(match.group(1))
@@ -245,36 +255,39 @@ class XServerGamesRenewal:
                     continue
 
             logger.warning("⚠️ 未找到剩余时间文本")
-            await self.shot("10_no_time_text")
+            await self.shot("12_no_remaining_text")
             return False
+
         except Exception as e:
             logger.error(f"❌ 获取剩余时间失败: {e}")
-            await self.shot("error_time")
+            await self.shot("error_remaining_time")
+            self.error_message = str(e)
             return False
 
     async def extend_contract(self) -> bool:
         try:
-            logger.info("🔄 开始续期")
-            await self.page.click("text=アップグレード・期限延長", timeout=15000)
+            logger.info("🔄 开始续期操作")
+            await self.page.click("text=アップグレード・期限延長", timeout=20000)
             await asyncio.sleep(6)
-            await self.shot("11_extend_clicked")
+            await self.shot("13_extend_clicked")
 
             if await self.page.query_selector("text=確認"):
                 await self.page.click("text=確認")
                 await asyncio.sleep(4)
+                await self.shot("14_confirm_clicked")
 
             try:
-                await self.page.wait_for_selector("text=延長しました", timeout=25000)
-                logger.info("🎉 续期成功！")
-                await self.shot("12_success")
+                await self.page.wait_for_selector("text=延長しました", timeout=30000)
+                logger.info("🎉 续期成功！看到“延長しました”提示")
+                await self.shot("15_success")
                 return True
             except PlaywrightTimeout:
-                logger.info("ℹ️ 未见成功提示，但可能已续期")
-                await self.shot("13_possible_success")
+                logger.info("ℹ️ 未看到成功提示，但很可能已续期")
+                await self.shot("16_possible_success")
                 return True
 
         except Exception as e:
-            logger.error(f"❌ 续期失败: {e}")
+            logger.error(f"❌ 续期操作失败: {e}")
             await self.shot("error_extend")
             self.error_message = str(e)
             return False
@@ -286,15 +299,15 @@ class XServerGamesRenewal:
             logger.info("=" * 60)
 
             if not await self.setup_browser():
-                await Notifier.notify("❌ 启动失败", self.error_message or "")
+                await Notifier.notify("❌ 启动失败", self.error_message or "浏览器启动异常")
                 return
 
             if not await self.login():
-                await Notifier.notify("❌ 登录失败", self.error_message or "")
+                await Notifier.notify("❌ 登录或进入面板失败", self.error_message or "")
                 return
 
             if not await self.get_remaining_time():
-                await Notifier.notify("⚠️ 检查失败", "无法读取剩余时间")
+                await Notifier.notify("⚠️ 检查剩余时间失败", "无法读取剩余时间")
                 return
 
             if self.remaining_hours >= 24:
@@ -302,14 +315,14 @@ class XServerGamesRenewal:
                 await Notifier.notify("ℹ️ 无需续期", f"当前剩余 {self.remaining_hours} 小时")
                 return
 
-            logger.info(f"⚠️ 剩余 {self.remaining_hours} 小时，开始续期")
+            logger.info(f"⚠️ 剩余仅 {self.remaining_hours} 小时，开始续期")
             if await self.extend_contract():
-                await Notifier.notify("✅ 续期成功", "已延长约 72 小时")
+                await Notifier.notify("✅ 续期成功", "已成功延长约 72 小时")
             else:
-                await Notifier.notify("❌ 续期失败", self.error_message or "")
+                await Notifier.notify("❌ 续期失败", self.error_message or "未知错误")
 
         finally:
-            logger.info(f"🏁 脚本结束 - 状态: {self.renewal_status}")
+            logger.info("🏁 脚本执行结束")
             try:
                 if self.browser:
                     await self.browser.close()
