@@ -1,0 +1,8 @@
+# Netscape HTTP Cookie File
+# https://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file! Do not edit.
+
+secure.xserver.ne.jp	FALSE	/xmgame	TRUE	0	X2%2Fxmgame_SESSID	ba821507a9c8f9e0365d593778d6e63950ffc81a774567a5968f266a7ed90355
+secure.xserver.ne.jp	FALSE	/	FALSE	1797390042	XSERVER_DEVICEKEY	Cl6cU97cQKkz
+.xserver.ne.jp	TRUE	/	FALSE	1774107963	_gcl_au	1.1.1727895125.1766331963
+secure.xserver.ne.jp	FALSE	/	TRUE	0	X2SESSID	58fa0a972f5cfbfdc4c9b7063f0638522faadf46cdfab0ad5164713329575c8c
