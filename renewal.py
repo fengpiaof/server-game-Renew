@@ -168,64 +168,82 @@ class XServerGamesRenewal:
 
     async def get_remaining_time(self) -> bool:
         try:
-            logger.info("正在获取剩余时间...")
-            # 改进：扫描主页面和所有 Iframe，扩展 selector 以匹配更多可能格式
-            time_selectors = [
-                "*:has-text('残り')",
-                "text=無料サーバー契約期限",
-                "div:has-text('時間')",
-                "text=/残り\\s*\\d+\\s*時間/",
-                "//*[contains(text(), '残り') and contains(text(), '時間')]",
-                "p:has-text('残り')",  # 可能在 p 标签中
-                "span:has-text('残り')",  # 可能在 span 中
-                "div[class*='time']",  # 如果有 class 包含 time
-            ]
+            # 确保我们有Iframe的上下文，这是之前版本成功的基础
+            if not hasattr(self, 'panel_frame') or not self.panel_frame:
+                # 如果因为某些原因 panel_frame 没有被设置，尝试重新定位
+                logger.warning("panel_frame 未设置，尝试重新定位Iframe...")
+                iframe_selector = "iframe[src*='game/index']"
+                await self.page.wait_for_selector(iframe_selector, timeout=15000)
+                self.panel_frame = self.page.frame_locator(iframe_selector)
 
-            frames = [self.page] + self.page.frames()[1:]  # 主页面 + Iframes
-            for frame in frames:
-                for sel in time_selectors:
-                    try:
-                        element = frame.locator(sel).first
-                        text_content = await element.text_content(timeout=15000)
-                        if text_content:
-                            logger.info(f"在 frame 中找到潜在时间文本: {text_content[:100]}")
-                            match = re.search(r'残り\s*(\d+)\s*時間', text_content, re.IGNORECASE)
-                            if match:
-                                self.remaining_hours = int(match.group(1))
-                                logger.info(f"📅 当前剩余时间: {self.remaining_hours} 小时")
-                                return True
-                    except:
-                        continue
+            logger.info("正在管理面板 (Iframe) 内部采用基于截图的“决定性框定”策略获取时间...")
+            await self.shot("03_before_get_time")
 
-            self.error_message = "在管理页面及所有 Iframe 上未找到剩余时间文本。"
-            logger.warning(self.error_message)
-            await self.shot("07_no_time_text")
+            # 1. 决定性框定：找到那个同时包含“契约期限”标题和“续期”按钮的“盒子”
+            # 这是从您的截图中得到的最可靠的定位器
+            server_info_box = self.panel_frame.locator(
+                "div.section:has(div.title:has-text('無料サーバー契約期限')):has(button:has-text('アップグレード・期限延長'))"
+            ).first
+            
+            await server_info_box.wait_for(state="visible", timeout=15000)
+            logger.info("✅ 成功框定服务器信息区域。")
+
+            # 2. 提取该区域的所有文字
+            full_text = await server_info_box.inner_text()
+            logger.debug(f"提取到的区域文本: \n---\n{full_text}\n---")
+
+            # 3. 在文字中搜索时间模式
+            match = re.search(r'残り\s*(\d+)\s*時間', full_text, re.MULTILINE)
+            if match:
+                self.remaining_hours = int(match.group(1))
+                logger.info(f"📅 当前剩余时间: {self.remaining_hours} 小时")
+                return True
+            
+            self.error_message = "在服务器信息区域内，无法从文本中匹配到 '残り X 時間' 模式。"
+            logger.error(self.error_message)
             return False
         except Exception as e:
             self.error_message = f"获取剩余时间失败: {e}"
             logger.error(self.error_message, exc_info=True)
-            await self.shot("08_error_time")
+            await self.shot("error_get_time")
             return False
 
     async def extend_contract(self) -> bool:
         try:
-            logger.info("🔄 开始续期流程...")
-            await self.page.click("text=アップグレード・期限延長", timeout=15000)
+            # 再次确保我们有Iframe的上下文
+            if not hasattr(self, 'panel_frame') or not self.panel_frame:
+                 self.error_message = "逻辑错误：执行续期时未找到有效的游戏面板 Iframe。"
+                 logger.error(self.error_message)
+                 return False
+
+            logger.info("🔄 正在管理面板 (Iframe) 内部开始续期流程...")
             
-            confirm_button = self.page.locator("button:has-text('確認'), input:has-text('確認')")
-            if await confirm_button.count() > 0:
-                await confirm_button.first.click()
+            # 在Iframe内部点击续期按钮
+            extend_button = self.panel_frame.locator("button:has-text('アップグレード・期限延長')")
+            await extend_button.click(timeout=15000)
             
-            await self.page.wait_for_selector("text=延長しました", timeout=30000)
+            # (可选) 加入一个短暂的延迟，等待对话框弹出
+            await asyncio.sleep(3) 
+            
+            # 处理可能出现的确认对话框，同样在Iframe的上下文中
+            # 注意：这里的定位器可能需要根据实际情况微调，比如它是否在一个modal里
+            confirm_button = self.panel_frame.locator("div.modal-content button:has-text('確認'), div.modal-content input:has-text('確認')").first
+            if await confirm_button.is_visible(timeout=5000):
+                logger.info("发现确认对话框，正在点击确认...")
+                await confirm_button.click()
+            
+            # 等待成功消息
+            await self.panel_frame.locator("text=延長しました").wait_for(state="visible", timeout=30000)
+            
             logger.info("🎉 续期成功！")
-            await self.shot("09_extend_success")
             self.renewal_status = "Success"
+            await self.shot("04_extend_success")
             return True
         except Exception as e:
             self.error_message = f"续期操作失败: {e}"
-            logger.error(self.error_message, exc_info=True)
-            await self.shot("10_error_extend")
             self.renewal_status = "Failed"
+            logger.error(self.error_message, exc_info=True)
+            await self.shot("error_extend")
             return False
 
     async def run(self):
