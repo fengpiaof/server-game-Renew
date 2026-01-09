@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 
 """
-XServer GAMEs 免费游戏服务器 自动续期脚本（真正最终版）
-- 修复了成功进入管理页面后，因URL不变而误判失败的问题。
-- 采用多策略、多方法（标准/强制/JS）在主页面和所有Iframe中点击。
-- 优化了时间和续期成功的检测逻辑。
-- GitHub Actions 完全兼容，日志和通知功能完善。
+XServer GAMEs 自动续期脚本（最终修正版）
+- 修复了在 Iframe 内部获取剩余时间失败的问题。
+- 所有面板操作（获取时间、续期）现在都会先正确定位到 Iframe 内部再执行。
+- 整合了之前所有成功的登录、点击、验证策略。
+- 这是最稳定、最健壮的版本。
 """
 
 import asyncio
@@ -14,7 +14,7 @@ import re
 import os
 import logging
 from typing import Optional
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from playwright.async_api import async_playwright, FrameLocator, TimeoutError as PlaywrightTimeout
 
 try:
     from playwright_stealth import stealth_async
@@ -32,7 +32,6 @@ class Config:
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     if not GAME_SERVER_ID:
         raise ValueError("请设置 XSERVER_GAME_SERVER_ID 环境变量")
-    GAME_PANEL_URL = f"https://cure.xserver.ne.jp/game-panel/{GAME_SERVER_ID}"
 
 # ======================== 日志 & 通知 ==========================
 logging.basicConfig(
@@ -70,6 +69,7 @@ class XServerGamesRenewal:
         self.page = None
         self.browser = None
         self._pw = None
+        self.panel_frame: Optional[FrameLocator] = None # 用于存储游戏面板的Iframe
         self.renewal_status = "Unknown"
         self.remaining_hours: Optional[int] = None
         self.error_message: Optional[str] = None
@@ -91,123 +91,86 @@ class XServerGamesRenewal:
             self.page = await context.new_page()
             if STEALTH_AVAILABLE: await stealth_async(self.page)
             self.page.set_default_timeout(Config.WAIT_TIMEOUT)
-            logger.info("✅ 浏览器启动成功")
             return True
         except Exception as e:
             self.error_message = f"浏览器启动失败: {e}"
-            logger.error(self.error_message, exc_info=True)
             return False
 
     async def login(self) -> bool:
         try:
             await self.page.goto("https://secure.xserver.ne.jp/xapanel/login/xmgame/")
-            await self.page.wait_for_selector("input[name='memberid'], input[name='email']", timeout=30000)
             await self.page.fill("input[name='memberid'], input[name='email']", Config.LOGIN_EMAIL)
             await self.page.fill("input[name='user_password'], input[name='password']", Config.LOGIN_PASSWORD)
-            await self.shot("01_credentials_filled")
-
-            async with self.page.expect_navigation(wait_until="domcontentloaded", timeout=40000):
+            
+            async with self.page.expect_navigation(wait_until="domcontentloaded"):
                 await self.page.click("input[type='submit'], button[type='submit']")
-            await self.shot("02_after_login")
-
+            
             if await self.page.is_visible('text=認証コード'):
                 self.error_message = "需要邮箱验证码，请关闭“不審なログイン時の認証”"
-                await self.shot("03_otp_page")
                 return False
 
-            logger.info("登录成功，开始执行终极点击策略...")
-            clicked = False
+            iframe_selector = "iframe[src*='game/index']"
+            await self.page.wait_for_selector(iframe_selector, timeout=20000)
+            self.panel_frame = self.page.frame_locator(iframe_selector)
+
             target_locator_str = f"tr:has-text('{Config.GAME_SERVER_ID}') >> a:has-text('ゲーム管理')"
-
-            async def robust_click(locator):
-                nonlocal clicked
-                try:
-                    await locator.wait_for(state='visible', timeout=7000)
-                    await locator.dispatch_event('click')
-                    clicked = True
-                except Exception: pass
-
-            logger.info("[阶段 1/2] 正在主页面上尝试...")
-            main_page_button = self.page.locator(target_locator_str)
-            if await main_page_button.count() > 0: await robust_click(main_page_button.first)
-
-            if not clicked:
-                logger.info("[阶段 2/2] 主页面失败，正在扫描所有 Iframe...")
-                for i, frame in enumerate(self.page.frames[1:], 1):
-                    logger.info(f"--- 检查 Iframe #{i} ---")
-                    iframe_button = frame.locator(target_locator_str)
-                    if await iframe_button.count() > 0:
-                        await robust_click(iframe_button.first)
-                        if clicked: break
-
-            if not clicked:
-                self.error_message = f"终极策略失败：无法点击ID为'{Config.GAME_SERVER_ID}'的管理按钮。"
-                await self.shot("04_click_failure")
-                return False
+            await self.panel_frame.locator(target_locator_str).dispatch_event('click')
             
-            # ========== 关键修改：验证方式变更 ==========
-            logger.info("✅ 点击操作已执行！现在验证是否成功进入管理页面...")
-            try:
-                # 不再等待URL，而是等待新页面上的标志性元素出现
-                landmark_element = self.page.locator("text=アップグレード・期限延長")
-                await landmark_element.wait_for(state="visible", timeout=30000)
-                logger.info("🎉 验证成功！已在页面上找到'アップグレード・期限延長'，确认进入管理面板！")
-                await self.shot("05_panel_success")
-                return True
-            except PlaywrightTimeout:
-                self.error_message = "点击后，未在管理页面上找到标志性元素，判定进入失败。"
-                logger.error(self.error_message)
-                await self.shot("06_panel_validation_failed")
-                return False
-
+            await self.panel_frame.locator("text=アップグレード・期限延長").wait_for(state="visible", timeout=30000)
+            logger.info("🎉 登录并进入管理面板成功！")
+            await self.shot("01_panel_success")
+            return True
         except Exception as e:
-            self.error_message = f"登录或点击流程发生未知错误: {e}"
-            logger.error(self.error_message, exc_info=True)
-            await self.shot("error_login_critical")
+            self.error_message = f"登录或进入面板流程失败: {e}"
+            await self.shot("error_login_or_panel")
             return False
 
     async def get_remaining_time(self) -> bool:
         try:
-            logger.info("正在获取剩余时间...")
-            # 直接在当前页面（已经是管理页面）寻找时间
-            text_locator = self.page.locator("*:textmatches('残り\\s*\\d+\\s*時間')")
+            if not self.panel_frame:
+                self.error_message = "逻辑错误：未找到有效的游戏面板 Iframe。"
+                return False
+
+            logger.info("正在管理面板 (Iframe) 内部获取剩余时间...")
+            text_locator = self.panel_frame.locator("*:textmatches('残り\\s*\\d+\\s*時間')")
             text_content = await text_locator.first.text_content(timeout=15000)
             
             match = re.search(r'残り\s*(\d+)\s*時間', text_content)
             if match:
                 self.remaining_hours = int(match.group(1))
                 logger.info(f"📅 当前剩余时间: {self.remaining_hours} 小时")
+                await self.shot("02_get_time_success")
                 return True
             
-            self.error_message = "在管理页面上未找到剩余时间文本。"
-            logger.warning(self.error_message)
-            await self.shot("07_no_time_text")
+            self.error_message = "在管理面板内部未找到剩余时间文本。"
             return False
         except Exception as e:
             self.error_message = f"获取剩余时间失败: {e}"
-            logger.error(self.error_message, exc_info=True)
-            await self.shot("08_error_time")
+            await self.shot("error_get_time")
             return False
 
     async def extend_contract(self) -> bool:
         try:
-            logger.info("🔄 开始续期流程...")
-            await self.page.click("text=アップグレード・期限延長", timeout=15000)
+            if not self.panel_frame:
+                self.error_message = "逻辑错误：未找到有效的游戏面板 Iframe。"
+                return False
+
+            logger.info("🔄 正在管理面板 (Iframe) 内部开始续期流程...")
+            await self.panel_frame.locator("text=アップグレード・期限延長").click(timeout=15000)
             
-            confirm_button = self.page.locator("button:has-text('確認'), input:has-text('確認')")
+            confirm_button = self.panel_frame.locator("button:has-text('確認'), input:has-text('確認')")
             if await confirm_button.count() > 0:
                 await confirm_button.first.click()
             
-            await self.page.wait_for_selector("text=延長しました", timeout=30000)
+            await self.panel_frame.locator("text=延長しました").wait_for(state="visible", timeout=30000)
+            
             logger.info("🎉 续期成功！")
-            await self.shot("09_extend_success")
+            await self.shot("03_extend_success")
             self.renewal_status = "Success"
             return True
         except Exception as e:
             self.error_message = f"续期操作失败: {e}"
-            logger.error(self.error_message, exc_info=True)
-            await self.shot("10_error_extend")
-            self.renewal_status = "Failed"
+            await self.shot("error_extend")
             return False
 
     async def run(self):
@@ -217,10 +180,10 @@ class XServerGamesRenewal:
                 await Notifier.notify("❌ 启动失败", self.error_message)
                 return
             if not await self.login():
-                await Notifier.notify("❌ 登录/点击失败", self.error_message)
+                await Notifier.notify("❌ 登录/进入面板失败", self.error_message)
                 return
             if not await self.get_remaining_time():
-                await Notifier.notify("⚠️ 检查失败", self.error_message)
+                await Notifier.notify("⚠️ 检查时间失败", self.error_message)
                 return
             if self.remaining_hours is not None and self.remaining_hours >= 24:
                 self.renewal_status = "Not Needed"
@@ -230,6 +193,7 @@ class XServerGamesRenewal:
                 if await self.extend_contract():
                     await Notifier.notify("✅ 续期成功", "操作完成，服务器已续期。")
                 else:
+                    self.renewal_status = "Failed"
                     await Notifier.notify("❌ 续期失败", self.error_message)
         except Exception as e:
             self.renewal_status = "Critical Error"
@@ -248,3 +212,4 @@ if __name__ == "__main__":
         print("错误：请确保 XSERVER_EMAIL, XSERVER_PASSWORD, 和 XSERVER_GAME_SERVER_ID 环境变量都已设置！")
     else:
         asyncio.run(main())
+
