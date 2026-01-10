@@ -235,20 +235,21 @@ class XServerGamesRenewal:
 
     # ── 執行續期 ─────────────────────────────────────────────────────────
     async def extend_contract(self) -> bool:
-        """
-        完全基于您提供的代码，仅修正“验证进入第二阶段”的定位器。
-        """
+        """嘗試在遊戲管理面板中執行續期操作（兩階段點擊 + 固定等待10秒）"""
         try:
-            panel = self.page  # 遵照您的指示，保持此行不变
+            panel = self.page
 
-            # --- 您的“第一阶段”逻辑，保持不变 ---
+            # 第一階段：點擊入口「アップグレード・期限延長」
             logger.info("🔄 第一階段：搜尋並點擊入口按鈕...")
             entry_loc = panel.locator(":text('アップグレード・期限延長')").first
+
             if not await entry_loc.is_visible(timeout=8000):
                 raise Exception("找不到入口按鈕 'アップグレード・期限延長'")
+
             await entry_loc.scroll_into_view_if_needed()
             await entry_loc.wait_for(state="visible", timeout=15000)
-            
+
+            # 三段式點擊入口
             clicked_entry = False
             for method in ["normal click", "dispatch", "js force"]:
                 try:
@@ -263,45 +264,36 @@ class XServerGamesRenewal:
                     break
                 except Exception as e:
                     logger.warning(f"第一階段 {method} 失敗: {str(e)[:80]}...")
+
             if not clicked_entry:
                 raise Exception("第一階段入口點擊失敗")
 
-            # ========== 唯一的、精准的修正 ==========
-            logger.info("✅ 第一階段點擊完成，正在使用“终极标志”驗證是否進入續期頁面...")
-            try:
-                # 这个定位器会寻找一个class为"section"的div，它必须同时包含"無料サーバー期限延長"的标题
-                # 和一个表格(<table>)。这是从您的截图中得到的最稳定、最可靠的结构。
-                final_page_landmark = panel.locator(
-                    "div.section:has(div.title:has-text('無料サーバー期限延長')):has(table)"
-                ).first
+            # 固定等待10秒，讓頁面完全載入（暫時移除特征驗證）
+            logger.info("第一階段完成，固定等待10秒讓續期頁面載入...")
+            await asyncio.sleep(10)
 
-                await final_page_landmark.wait_for(state="visible", timeout=30000)
-                logger.info("🎉 驗證成功！已在頁面上找到包含標題和表格的特征區域，確認進入最終續期頁面！")
-                await self.shot("08_final_page_validated")
-            except Exception as e:
-                self.error_message = f"第一階段點擊後，未能找到续期页面的“终极标志”，判定進入失敗: {e}"
-                logger.error(self.error_message, exc_info=True)
-                await self.shot("09_final_page_validation_failed")
-                raise Exception(self.error_message)
+            await self.shot("08_after_first_click")  # 拍攝進入頁面截圖，便於確認
 
-            # 第二階段：點擊真正的綠色「期限延長する」按鈕
+            # 第二階段：直接搜尋並點擊最終綠色「期限延長する」按鈕
             logger.info("🔄 第二階段：搜尋並點擊最終『期限延長する』按鈕...")
             final_button = panel.locator(":text('期限延長する')").first
 
             # 如果嚴格匹配失敗，放寬 locator
-            if not await final_button.is_visible(timeout=10000):
+            if not await final_button.is_visible(timeout=15000):
+                logger.warning("嚴格 locator 未命中，嘗試放寬...")
                 final_button = panel.locator(
-                    "text=期限延長する, button:text('期限延長'), [class*='btn']:text('期限延長'), "
-                    "text=期限延長"
+                    "text=期限延長する, text=期限延長, button:text('期限延長'), "
+                    "[class*='btn']:text('期限延長'), [class*='button']:text('期限延長')"
                 ).first
 
-            if not await final_button.is_visible(timeout=15000):
+            if not await final_button.is_visible(timeout=20000):
+                # 診斷：列出頁面所有 "期限" 相關文字
                 all_related = await panel.locator("text=期限, text=延長, text=する").all_inner_texts()
                 logger.error(f"最終按鈕未找到！頁面相關文字: {all_related}")
                 await self.shot("DEBUG_no_final_button")
                 raise Exception("第二階段：找不到最終綠色按鈕 '期限延長する'")
 
-            await final_button.scroll_into_view_if_needed()  # 確保滾動到右下角
+            await final_button.scroll_into_view_if_needed()  # 確保滾到右下角
             await final_button.wait_for(state="visible", timeout=20000)
 
             # 三段式點擊最終按鈕
