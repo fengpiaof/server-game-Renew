@@ -238,37 +238,71 @@ class XServerGamesRenewal:
             await self.shot("error_get_time")
             return False
 
-    async def extend_contract(self) -> bool:
+        async def extend_contract(self) -> bool:
         try:
-            logger.info("🔄 正在管理面板內開始續期流程...")
+            # 再次确保我们拥有Iframe的上下文
+            if not self.panel_frame:
+                self.error_message = "逻辑错误：执行续期时未找到有效的游戏面板 Iframe。"
+                logger.error(self.error_message)
+                return False
 
-            extend_button = self.page.locator("button:has-text('アップグレード・期限延長')")
-            await extend_button.click(timeout=15000)
+            logger.info("🔄 正在管理面板 (Iframe) 内部采用“终极点击策略”开始续期...")
+            await self.human_like_delay() # 在续期前，模拟人类的停顿
 
-            await asyncio.sleep(3)
+            # 关键修复：采用多种点击方法，确保能“穿透”任何阻碍
+            extend_button = self.panel_frame.locator("button:has-text('アップグレード・期限延長')")
+            clicked = False
 
-            confirm_button = self.page.locator(
+            try:
+                # 策略一：尝试低级别的 dispatch_event，这能绕过很多检查
+                logger.info("  - [策略1/2] 尝试 dispatch_event('click')...")
+                await extend_button.wait_for(state="visible", timeout=10000)
+                await extend_button.dispatch_event('click')
+                clicked = True
+                logger.info("  - ✅ dispatch_event('click') 成功。")
+            except Exception as e:
+                logger.warning(f"  - [策略1/2] dispatch_event('click') 失败: {e}")
+                
+                # 策略二：如果上面失败，使用最终极的JavaScript点击
+                try:
+                    logger.info("  - [策略2/2] 尝试最终的 JavaScript 点击...")
+                    await extend_button.evaluate("el => el.click()")
+                    clicked = True
+                    logger.info("  - ✅ JavaScript 点击成功。")
+                except Exception as js_e:
+                    logger.error(f"  - [策略2/2] 所有点击策略均失败: {js_e}")
+                    raise js_e # 抛出异常，让外层捕获
+
+            if not clicked:
+                self.error_message = "所有点击策略均未能成功点击续期按钮。"
+                raise Exception(self.error_message)
+
+            await self.human_like_delay(2, 4) # 点击后等待可能的对话框
+
+            # 处理可能出现的确认对话框
+            confirm_button = self.panel_frame.locator(
                 "div.modal-content button:has-text('確認'), "
                 "div.modal-content input:has-text('確認')"
             ).first
-
+            
             if await confirm_button.is_visible(timeout=5000):
-                logger.info("發現確認對話框，正在點擊確認...")
+                logger.info("发现确认对话框，正在点击确认...")
                 await confirm_button.click()
 
-            await self.page.locator("text=延長しました").wait_for(state="visible", timeout=30000)
+            # 等待成功消息
+            await self.panel_frame.locator("text=延長しました").wait_for(state="visible", timeout=30000)
 
-            logger.info("🎉 續期成功！")
+            logger.info("🎉 续期成功！")
             self.renewal_status = "Success"
-            await self.shot("08_extend_success")
+            await self.shot("04_extend_success")
             return True
-
         except Exception as e:
-            self.error_message = f"續期操作失敗: {e}"
+            self.error_message = f"续期操作失败: {e}"
             self.renewal_status = "Failed"
             logger.error(self.error_message, exc_info=True)
             await self.shot("error_extend")
             return False
+
 
     async def run(self):
         try:
