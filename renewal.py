@@ -235,11 +235,11 @@ class XServerGamesRenewal:
 
     # ── 執行續期 ─────────────────────────────────────────────────────────
     async def extend_contract(self) -> bool:
-        """嘗試在遊戲管理面板中執行續期操作（兩階段點擊 + 固定等待10秒）"""
+        """嘗試在遊戲管理面板中執行續期操作（兩階段點擊 + 強化第二階段）"""
         try:
             panel = self.page
 
-            # 第一階段：點擊入口「アップグレード・期限延長」
+            # 第一階段：入口按鈕（保持穩定）
             logger.info("🔄 第一階段：搜尋並點擊入口按鈕...")
             entry_loc = panel.locator(":text('アップグレード・期限延長')").first
 
@@ -249,7 +249,6 @@ class XServerGamesRenewal:
             await entry_loc.scroll_into_view_if_needed()
             await entry_loc.wait_for(state="visible", timeout=15000)
 
-            # 三段式點擊入口
             clicked_entry = False
             for method in ["normal click", "dispatch", "js force"]:
                 try:
@@ -268,14 +267,12 @@ class XServerGamesRenewal:
             if not clicked_entry:
                 raise Exception("第一階段入口點擊失敗")
 
-            # 固定等待10秒，讓頁面完全載入（暫時移除特征驗證）
-            logger.info("第一階段完成，固定等待10秒讓續期頁面載入...")
-            await asyncio.sleep(10)
+            # 固定等待 15 秒（確保頁面完全載入）
+            logger.info("第一階段完成，等待 15 秒讓續期頁面完全載入...")
+            await asyncio.sleep(15)
+            await self.shot("08_after_enter_final_page")  # 進入第二頁面截圖
 
-            await self.shot("08_after_first_click")  # 拍攝進入頁面截圖，便於確認
-
-            # 第二階段：直接搜尋並點擊最終綠色「期限延長する」按鈕
-# 第二階段：強化搜尋並點擊綠色「期限を延長する」按鈕（完全複製第一階段點擊邏輯）
+            # 第二階段：強化搜尋並點擊綠色「期限を延長する」按鈕（完全複製第一階段點擊邏輯）
             logger.info("🔄 第二階段：強化搜尋並點擊綠色『期限を延長する』按鈕...")
 
             # 第二階段 locator（正確文字 + 多層放寬）
@@ -346,6 +343,30 @@ class XServerGamesRenewal:
                     raise Exception("第二階段所有點擊方式失敗")
 
             await asyncio.sleep(5)
+
+            # 處理確認彈窗（極寬鬆）
+            confirm_loc = panel.locator(
+                "text=確認, text=はい, text=OK, text=確定, button:has-text('確認'), :text('確認')"
+            ).first
+            if await confirm_loc.is_visible(timeout=12000):
+                logger.info("發現確認彈窗 → 點擊")
+                await confirm_loc.click(force=True)
+
+            # 等待成功提示
+            await panel.locator(
+                "text=延長しました, text=更新しました, text=完了, text=成功, text=更新完了"
+            ).wait_for(state="visible", timeout=70000)
+
+            logger.info("🎉 續期全流程成功！")
+            self.renewal_status = "Success"
+            await self.shot("success_final")
+            return True
+
+        except Exception as e:
+            self.error_message = f"續期失敗: {str(e)}"
+            logger.error(self.error_message, exc_info=True)
+            await self.shot("error_extend_final")
+            return False
 
     # ── 主流程 ───────────────────────────────────────────────────────────
     async def run(self):
