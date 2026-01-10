@@ -238,32 +238,31 @@ class XServerGamesRenewal:
         try:
             logger.info("🔄 开始最终的续期流程，将采用最严格的实时上下文策略...")
             
-            # 关键修正：不再信任 self.panel_frame。在执行操作前，重新获取最新、最实时的Iframe上下文。
-            # 这是我们所有失败经验的最终总结。
+            # 步骤1：重新定位，获取实时的Iframe上下文
             logger.info("  - [步骤1/4] 重新定位，获取实时的Iframe上下文...")
             iframe_selector = "iframe[src*='game/index']"
+            panel_frame = None
             try:
-                # 等待Iframe本身在主页面上可见
                 await self.page.wait_for_selector(iframe_selector, state="visible", timeout=15000)
                 panel_frame = self.page.frame_locator(iframe_selector)
-                # 进一步验证Iframe内部是否已加载好，比如等待续期按钮本身出现
                 await panel_frame.locator("button:has-text('アップグレード・期限延長')").first.wait_for(state="visible", timeout=15000)
                 logger.info("  - ✅ 成功获取并验证了实时的Iframe上下文。")
             except Exception as e:
                 self.error_message = f"无法在续期前获取或验证实时的Iframe上下文: {e}"
                 raise Exception(self.error_message)
 
-            await self.human_like_delay() # 在续期前，模拟人类的停顿
+            await self.human_like_delay()
 
-            # 关键修正：采用多种点击方法，确保能“穿透”任何阻碍
+            # 步骤2：采用终极点击策略点击续期按钮
             extend_button = panel_frame.locator("button:has-text('アップグレード・期限延長')")
             clicked = False
             
             logger.info("  - [步骤2/4] 采用终极点击策略点击续期按钮...")
             try:
-                # 策略一：尝试低级别的 dispatch_event，这能绕过很多检查
+                # 策略一：尝试低级别的 dispatch_event
                 logger.info("    - [策略1/2] 尝试 dispatch_event('click')...")
-                await extend_button.dispatch_event('click', timeout=10000)
+                # 关键修正：移除 dispatch_event 的 timeout 参数
+                await extend_button.dispatch_event('click')
                 clicked = True
                 logger.info("    - ✅ dispatch_event('click') 成功。")
             except Exception as e:
@@ -283,9 +282,9 @@ class XServerGamesRenewal:
                 self.error_message = "所有点击策略均未能成功点击续期按钮。"
                 raise Exception(self.error_message)
 
-            await self.human_like_delay(2, 4) # 点击后等待可能的对话框
+            await self.human_like_delay(2, 4)
 
-            # 关键修正：在最新的、实时的Iframe内部寻找确认对话框
+            # 步骤3：检查并处理确认对话框
             logger.info("  - [步骤3/4] 检查并处理确认对话框...")
             confirm_button = panel_frame.locator(
                 "div.modal-content button:has-text('確認'), "
@@ -296,7 +295,7 @@ class XServerGamesRenewal:
                 logger.info("    - 发现确认对话框，正在点击确认...")
                 await confirm_button.click()
 
-            # 关键修正：在最新的、实时的Iframe内部等待成功消息
+            # 步骤4：等待最终的成功消息
             logger.info("  - [步骤4/4] 等待最终的成功消息...")
             await panel_frame.locator("text=延長しました").wait_for(state="visible", timeout=30000)
 
@@ -310,8 +309,6 @@ class XServerGamesRenewal:
             logger.error(self.error_message, exc_info=True)
             await self.shot("FINAL_ERROR")
             return False
-
-
 
     # ── 主流程 ───────────────────────────────────────────────────────────
     async def run(self):
