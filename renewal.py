@@ -285,7 +285,7 @@ class XServerGamesRenewal:
             logger.info(f"元素已找到，使用 selector: {found_selector}")
             await extend_loc.scroll_into_view_if_needed()
             await extend_loc.wait_for(state="visible", timeout=15000)
-            await extend_loc.wait_for(state="enabled", timeout=10000)
+            # 已移除 wait_for(state="enabled")，因為部分 Playwright 版本不支援此狀態
 
             # 三段式點擊嘗試（由普通 → 強制）
             clicked = False
