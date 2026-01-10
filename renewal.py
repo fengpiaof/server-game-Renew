@@ -166,40 +166,39 @@ class XServerGamesRenewal:
             await self.shot("error_login_critical")
             return False
 
-    async def get_remaining_time(self) -> bool:
+        async def get_remaining_time(self) -> bool:
         try:
-            # 确保我们有Iframe的上下文，这是之前版本成功的基础
-            if not hasattr(self, 'panel_frame') or not self.panel_frame:
-                # 如果因为某些原因 panel_frame 没有被设置，尝试重新定位
-                logger.warning("panel_frame 未设置，尝试重新定位Iframe...")
-                iframe_selector = "iframe[src*='game/index']"
-                await self.page.wait_for_selector(iframe_selector, timeout=15000)
-                self.panel_frame = self.page.frame_locator(iframe_selector)
+            # 再次确认我们拥有Iframe的上下文
+            if not self.panel_frame:
+                self.error_message = "逻辑错误：执行时间获取时未找到有效的游戏面板 Iframe。"
+                logger.error(self.error_message)
+                return False
 
-            logger.info("正在管理面板 (Iframe) 内部采用基于截图的“决定性框定”策略获取时间...")
+            logger.info("正在管理面板 (Iframe) 内部采用最终的“简单包含”策略获取时间...")
+            await self.human_like_delay(2, 4)
             await self.shot("03_before_get_time")
 
-            # 1. 决定性框定：找到那个同时包含“契约期限”标题和“续期”按钮的“盒子”
-            # 这是从您的截图中得到的最可靠的定位器
-            server_info_box = self.panel_frame.locator(
-                "div.section:has(div.title:has-text('無料サーバー契約期限')):has(button:has-text('アップグレード・期限延長'))"
-            ).first
-            
-            await server_info_box.wait_for(state="visible", timeout=15000)
-            logger.info("✅ 成功框定服务器信息区域。")
+            # 最终定位策略：在Iframe内部，找到那个同时包含“残り”和“時間”这两个文本的元素。
+            # Playwright会自动处理嵌套，找到包含这两个文本的最小公共父元素。
+            # 这是从您提供的最终截图中得到的最直接、最可靠的方法。
+            time_section_locator = self.panel_frame.locator("*:has-text('残り'):has-text('時間')").first
 
-            # 2. 提取该区域的所有文字
-            full_text = await server_info_box.inner_text()
+            # 等待这个元素出现
+            await time_section_locator.wait_for(state="visible", timeout=15000)
+            logger.info("✅ 成功定位到包含剩余时间的区域。")
+
+            # 提取该区域的全部文本
+            full_text = await time_section_locator.inner_text()
             logger.debug(f"提取到的区域文本: \n---\n{full_text}\n---")
 
-            # 3. 在文字中搜索时间模式
+            # 在提取出的文本中搜索时间模式
             match = re.search(r'残り\s*(\d+)\s*時間', full_text, re.MULTILINE)
             if match:
                 self.remaining_hours = int(match.group(1))
                 logger.info(f"📅 当前剩余时间: {self.remaining_hours} 小时")
                 return True
             
-            self.error_message = "在服务器信息区域内，无法从文本中匹配到 '残り X 時間' 模式。"
+            self.error_message = "在定位到的区域内，无法从文本中匹配到 '残り X 時間' 模式。"
             logger.error(self.error_message)
             return False
         except Exception as e:
