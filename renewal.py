@@ -236,69 +236,43 @@ class XServerGamesRenewal:
     # ── 執行續期 ─────────────────────────────────────────────────────────
     async def extend_contract(self) -> bool:
         try:
-            logger.info("🔄 开始最终的续期流程，将采用最严格的实时上下文策略...")
-            
-            # 步骤1：重新定位，获取实时的Iframe上下文
-            logger.info("  - [步骤1/4] 重新定位，获取实时的Iframe上下文...")
-            iframe_selector = "iframe[src*='game/index']"
-            panel_frame = None
-            try:
-                await self.page.wait_for_selector(iframe_selector, state="visible", timeout=15000)
-                panel_frame = self.page.frame_locator(iframe_selector)
-                await panel_frame.locator("button:has-text('アップグレード・期限延長')").first.wait_for(state="visible", timeout=15000)
-                logger.info("  - ✅ 成功获取并验证了实时的Iframe上下文。")
-            except Exception as e:
-                self.error_message = f"无法在续期前获取或验证实时的Iframe上下文: {e}"
-                raise Exception(self.error_message)
+            # 关键修正：我们不再重新寻找Iframe，而是直接、无条件地使用login函数成功后留下的 self.panel_frame
+            if not hasattr(self, 'panel_frame') or not self.panel_frame:
+                self.error_message = "逻辑断裂：login函数未能成功设置panel_frame。"
+                logger.error(self.error_message)
+                return False
 
-            await self.human_like_delay()
-
-            # 步骤2：采用终极点击策略点击续期按钮
-            extend_button = panel_frame.locator("button:has-text('アップグレード・期限延長')")
-            clicked = False
+            logger.info("🔄 正在已验证的管理面板 (Iframe) 内部，直接开始续期流程...")
+            await self.human_like_delay() # 在续期前，模拟人类的停顿
             
-            logger.info("  - [步骤2/4] 采用终极点击策略点击续期按钮...")
+            # 直接在已有的、正确的Iframe上下文中，执行终极点击策略
+            extend_button = self.panel_frame.locator("button:has-text('アップグレード・期限延長')")
+            
             try:
-                # 策略一：尝试低级别的 dispatch_event
-                logger.info("    - [策略1/2] 尝试 dispatch_event('click')...")
-                # 关键修正：移除 dispatch_event 的 timeout 参数
+                # 尝试我们已知最强大的点击方法
+                logger.info("  - 尝试使用 dispatch_event('click') 点击续期按钮...")
                 await extend_button.dispatch_event('click')
-                clicked = True
-                logger.info("    - ✅ dispatch_event('click') 成功。")
-            except Exception as e:
-                logger.warning(f"    - [策略1/2] dispatch_event('click') 失败: {e}")
-                
-                # 策略二：如果上面失败，使用最终极的JavaScript点击
+                logger.info("  - ✅ dispatch_event 点击成功。")
+            except Exception as e1:
+                logger.warning(f"  - dispatch_event 点击失败: {e1}，尝试 JavaScript 点击...")
                 try:
-                    logger.info("    - [策略2/2] 尝试最终的 JavaScript 点击...")
-                    await extend_button.evaluate("el => el.click()", timeout=10000)
-                    clicked = True
-                    logger.info("    - ✅ JavaScript 点击成功。")
-                except Exception as js_e:
-                    logger.error(f"    - [策略2/2] 所有点击策略均失败: {js_e}")
-                    raise js_e
+                    await extend_button.evaluate("el => el.click()")
+                    logger.info("  - ✅ JavaScript 点击成功。")
+                except Exception as e2:
+                    self.error_message = f"所有点击策略均失败: {e2}"
+                    raise Exception(self.error_message)
 
-            if not clicked:
-                self.error_message = "所有点击策略均未能成功点击续期按钮。"
-                raise Exception(self.error_message)
+            await self.human_like_delay(2, 4) # 点击后等待可能的对话框
 
-            await self.human_like_delay(2, 4)
-
-            # 步骤3：检查并处理确认对话框
-            logger.info("  - [步骤3/4] 检查并处理确认对话框...")
-            confirm_button = panel_frame.locator(
-                "div.modal-content button:has-text('確認'), "
-                "div.modal-content input:has-text('確認')"
-            ).first
-            
+            # 在同一个Iframe上下文中处理确认对话框
+            confirm_button = self.panel_frame.locator("div.modal-content button:has-text('確認'), div.modal-content input:has-text('確認')").first
             if await confirm_button.is_visible(timeout=5000):
-                logger.info("    - 发现确认对话框，正在点击确认...")
+                logger.info("发现确认对话框，正在点击确认...")
                 await confirm_button.click()
-
-            # 步骤4：等待最终的成功消息
-            logger.info("  - [步骤4/4] 等待最终的成功消息...")
-            await panel_frame.locator("text=延長しました").wait_for(state="visible", timeout=30000)
-
+            
+            # 在同一个Iframe上下文中等待成功消息
+            await self.panel_frame.locator("text=延長しました").wait_for(state="visible", timeout=30000)
+            
             logger.info("🎉🎉🎉 续期成功！我们终于完成了！ 🎉🎉🎉")
             self.renewal_status = "Success"
             await self.shot("FINAL_SUCCESS")
