@@ -334,17 +334,16 @@ class XServerGamesRenewal:
                     logger.error(f"第二階段 JS 強制失敗: {str(e)}")
                     raise Exception("第二階段所有點擊方式失敗")
 
-            # 第二階段成功後：固定等待 10 秒（無驗證），進入第三階段
+            # 第二階段成功後：固定等待 10 秒（無驗證）
             logger.info("第二階段完成，固定等待 10 秒進入第三階段...")
             await asyncio.sleep(10)
             await self.shot("10_after_third_load")
 
-            # 第三階段：處理確認彈窗 + 等待成功訊息
-            logger.info("🔄 第三階段：處理確認彈窗 + 等待成功訊息...")
+            # 第三階段：處理確認彈窗（保持成功版本）
+            logger.info("🔄 第三階段：處理確認彈窗...")
 
             await asyncio.sleep(3)  # 等待彈窗出現
 
-            # 搜尋確認按鈕（極寬鬆匹配）
             confirm_loc = None
             confirm_selectors = [
                 "button:has-text('はい'), button:has-text('確認'), button:has-text('OK')",
@@ -388,37 +387,20 @@ class XServerGamesRenewal:
             else:
                 logger.warning("未找到確認彈窗，系統可能自動處理或無需確認")
 
-            # 等待成功訊息（極寬鬆 + 延長到90秒）
-            logger.info("等待續期成功訊息出現...")
-            success_locator = panel.locator(
-                "text=延長しました, text=期限延長しました, text=延長完了, "
-                "text=更新しました, text=更新完了, text=完了しました, "
-                "text=成功, text=成功しました, text=延長完了しました"
-            )
-            try:
-                await success_locator.wait_for(state="visible", timeout=90000)
-                logger.info("續期成功訊息出現！")
-            except PlaywrightTimeout:
-                all_success = await panel.locator("text=延長, text=完了, text=更新, text=成功").all_inner_texts()
-                logger.error(f"成功訊息未找到！頁面相關文字: {all_success}")
-                await self.shot("DEBUG_no_success_message")
-                raise Exception("第三階段：等待成功訊息超時")
-
-            # 第三階段完成後：固定等待 10 秒，進入第四階段
+            # 第三階段完成後：固定等待 10 秒（無驗證），進入第四階段
             logger.info("第三階段完成，固定等待 10 秒進入第四階段...")
             await asyncio.sleep(10)
             await self.shot("11_after_fourth_load")
 
-            # 第四階段：點擊最終頁面的藍色「期限を延長する」按鈕
+            # 第四階段：點擊最終藍色「期限を延長する」按鈕
             logger.info("🔄 第四階段：點擊最終藍色『期限を延長する』按鈕...")
 
             fourth_selectors = [
                 ":text('期限を延長する')",                          # 正確完整文字（最優先）
                 "text=期限を延長する",
-                ":text('期限延長する')",                             # 可能無「を」
-                "button:has-text('期限を延長'), button:has-text('期限延長')",
+                "button:has-text('期限を延長'), a:has-text('期限を延長')",
                 "[class*='btn']:has-text('期限'), [class*='button']:has-text('延長')",
-                "[class*='primary'], [class*='blue'], [class*='success']",  # 藍色/綠色樣式
+                "[class*='primary'], [class*='blue'], [class*='success']",  # 藍色樣式
                 "text=延長"                                          # 極寬鬆
             ]
 
