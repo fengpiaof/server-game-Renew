@@ -235,7 +235,7 @@ class XServerGamesRenewal:
 
     # ── 執行續期 ─────────────────────────────────────────────────────────
     async def extend_contract(self) -> bool:
-        """嘗試在遊戲管理面板中執行續期操作（兩階段點擊 + 第三階段）"""
+        """嘗試在遊戲管理面板中執行續期操作（三階段 + 第四階段）"""
         try:
             panel = self.page
 
@@ -270,18 +270,18 @@ class XServerGamesRenewal:
             # 固定等待 15 秒（確保頁面完全載入）
             logger.info("第一階段完成，等待 15 秒讓續期頁面完全載入...")
             await asyncio.sleep(15)
-            await self.shot("08_after_enter_final_page")  # 進入第二頁面截圖
+            await self.shot("08_after_enter_final_page")
 
             # 第二階段：強化搜尋並點擊綠色「期限を延長する」按鈕（保持成功版本）
             logger.info("🔄 第二階段：強化搜尋並點擊綠色『期限を延長する』按鈕...")
 
             final_selectors = [
-                ":text('期限を延長する')",                          # 正確完整文字（最優先）
+                ":text('期限を延長する')",
                 "text=期限を延長する",
-                ":text('期限を延長')",                               # 部分匹配
+                ":text('期限を延長')",
                 "button:has-text('期限を延長'), a:has-text('期限を延長')",
                 "[class*='btn']:has-text('期限'), [class*='button']:has-text('延長')",
-                "[class*='success'], [class*='primary'], [class*='green']",  # 綠色樣式
+                "[class*='success'], [class*='primary'], [class*='green']",
             ]
 
             final_loc = None
@@ -334,10 +334,10 @@ class XServerGamesRenewal:
                     logger.error(f"第二階段 JS 強制失敗: {str(e)}")
                     raise Exception("第二階段所有點擊方式失敗")
 
-            # 第二階段成功後：固定等待 10 秒（無驗證）
+            # 第二階段成功後：固定等待 10 秒（無驗證），進入第三階段
             logger.info("第二階段完成，固定等待 10 秒進入第三階段...")
             await asyncio.sleep(10)
-            await self.shot("10_after_third_load")  # 第三階段開始截圖
+            await self.shot("10_after_third_load")
 
             # 第三階段：處理確認彈窗 + 等待成功訊息
             logger.info("🔄 第三階段：處理確認彈窗 + 等待成功訊息...")
@@ -404,7 +404,67 @@ class XServerGamesRenewal:
                 await self.shot("DEBUG_no_success_message")
                 raise Exception("第三階段：等待成功訊息超時")
 
-            logger.info("🎉 續期全流程成功！")
+            # 第三階段完成後：固定等待 10 秒，進入第四階段
+            logger.info("第三階段完成，固定等待 10 秒進入第四階段...")
+            await asyncio.sleep(10)
+            await self.shot("11_after_fourth_load")
+
+            # 第四階段：點擊最終頁面的藍色「期限を延長する」按鈕
+            logger.info("🔄 第四階段：點擊最終藍色『期限を延長する』按鈕...")
+
+            fourth_selectors = [
+                ":text('期限を延長する')",                          # 正確完整文字（最優先）
+                "text=期限を延長する",
+                ":text('期限延長する')",                             # 可能無「を」
+                "button:has-text('期限を延長'), button:has-text('期限延長')",
+                "[class*='btn']:has-text('期限'), [class*='button']:has-text('延長')",
+                "[class*='primary'], [class*='blue'], [class*='success']",  # 藍色/綠色樣式
+                "text=延長"                                          # 極寬鬆
+            ]
+
+            fourth_loc = None
+            for sel in fourth_selectors:
+                loc = panel.locator(sel).first
+                try:
+                    if await loc.is_visible(timeout=12000):
+                        fourth_loc = loc
+                        logger.info(f"★ 第四階段命中 selector: {sel}")
+                        break
+                except:
+                    continue
+
+            if not fourth_loc:
+                logger.warning("所有 selector 失敗，使用兜底：頁面最後一個可見 button")
+                fourth_loc = panel.locator("button:visible, [role='button']:visible").last
+                if not await fourth_loc.is_visible(timeout=8000):
+                    all_buttons = await panel.locator("button, [role='button']").all_inner_texts()
+                    logger.error(f"第四階段兜底失敗！頁面 button 文字: {all_buttons}")
+                    await self.shot("DEBUG_no_fourth_button")
+                    raise Exception("第四階段：找不到『期限を延長する』藍色按鈕")
+
+            await fourth_loc.scroll_into_view_if_needed()
+            await asyncio.sleep(2)
+            await fourth_loc.wait_for(state="visible", timeout=20000)
+
+            clicked_fourth = False
+            for method in ["normal click (force)", "dispatch", "js force"]:
+                try:
+                    if method == "normal click (force)":
+                        await fourth_loc.click(force=True, timeout=12000)
+                    elif method == "dispatch":
+                        await fourth_loc.dispatch_event("click")
+                    else:
+                        await fourth_loc.evaluate("el => el.click()")
+                    clicked_fourth = True
+                    logger.info(f"第四階段點擊成功 ({method}) - 藍色最終按鈕觸發！")
+                    break
+                except Exception as e:
+                    logger.warning(f"第四階段 {method} 失敗: {str(e)[:100]}...")
+
+            if not clicked_fourth:
+                raise Exception("第四階段最終按鈕點擊失敗")
+
+            logger.info("🎉 續期全流程（四階段）成功！")
             self.renewal_status = "Success"
             await self.shot("success_all_stages")
             return True
