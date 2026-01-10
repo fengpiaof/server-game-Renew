@@ -235,7 +235,7 @@ class XServerGamesRenewal:
 
     # ── 執行續期 ─────────────────────────────────────────────────────────
     async def extend_contract(self) -> bool:
-        """嘗試在遊戲管理面板中執行續期操作（兩階段點擊 + 強化第二階段）"""
+        """嘗試在遊戲管理面板中執行續期操作（兩階段點擊 + 第三階段）"""
         try:
             panel = self.page
 
@@ -267,99 +267,79 @@ class XServerGamesRenewal:
             if not clicked_entry:
                 raise Exception("第一階段入口點擊失敗")
 
-            # 固定等待 15 秒（確保頁面完全載入）
-            logger.info("第一階段完成，等待 15 秒讓續期頁面完全載入...")
-            await asyncio.sleep(15)
-            await self.shot("08_after_enter_final_page")  # 進入第二頁面截圖
+            # 固定等待 10 秒（第二階段成功後，不驗證，直接等待）
+            logger.info("第二階段完成，固定等待 10 秒...")
+            await asyncio.sleep(10)
+            await self.shot("09_after_second_click")  # 確認第二階段後截圖
 
-            # 第二階段：強化搜尋並點擊綠色「期限を延長する」按鈕（完全複製第一階段點擊邏輯）
-            logger.info("🔄 第二階段：強化搜尋並點擊綠色『期限を延長する』按鈕...")
+            # 第三階段：處理確認彈窗 + 等待成功訊息
+            logger.info("🔄 第三階段：處理確認彈窗 + 等待成功訊息...")
 
-            # 第二階段 locator（正確文字 + 多層放寬）
-            final_selectors = [
-                ":text('期限を延長する')",                          # 正確完整文字（最優先）
-                "text=期限を延長する",
-                ":text('期限を延長')",                               # 部分匹配
-                "button:has-text('期限を延長'), a:has-text('期限を延長')",
-                "[class*='btn']:has-text('期限'), [class*='button']:has-text('延長')",
-                "[class*='success'], [class*='primary'], [class*='green']",  # 綠色樣式
+            await asyncio.sleep(3)  # 等待彈窗出現
+
+            # 搜尋確認彈窗按鈕（寬鬆匹配）
+            confirm_loc = None
+            confirm_selectors = [
+                "button:has-text('はい'), button:has-text('確認')",
+                ":text('はい'), :text('確認')",
+                "text=はい, text=確認, text=OK, text=確定",
+                "button:text('はい'), button:text('確認')"
             ]
 
-            final_loc = None
-            for sel in final_selectors:
+            for sel in confirm_selectors:
                 loc = panel.locator(sel).first
                 try:
                     if await loc.is_visible(timeout=10000):
-                        final_loc = loc
-                        logger.info(f"★ 第二階段命中 selector: {sel}")
+                        confirm_loc = loc
+                        logger.info(f"★ 第三階段命中確認按鈕: {sel}")
                         break
                 except:
                     continue
 
-            if not final_loc:
-                # 兜底：任何最後一個可見 button
-                logger.warning("所有 selector 失敗，使用兜底：頁面最後一個可見 button")
-                final_loc = panel.locator("button:visible, [role='button']:visible").last
-                if not await final_loc.is_visible(timeout=8000):
-                    all_buttons = await panel.locator("button, [role='button']").all_inner_texts()
-                    logger.error(f"兜底失敗！頁面 button 文字: {all_buttons}")
-                    await self.shot("DEBUG_no_final_button")
-                    raise Exception("第二階段：找不到任何可點按鈕")
+            if confirm_loc:
+                await confirm_loc.scroll_into_view_if_needed()
+                await confirm_loc.wait_for(state="visible", timeout=15000)
 
-            # 強化：強制滾動 + 等待可見（與第一階段完全一致）
-            await final_loc.scroll_into_view_if_needed()
-            await asyncio.sleep(2)  # 滾動後緩衝
-            await final_loc.wait_for(state="visible", timeout=20000)
+                clicked_confirm = False
+                for method in ["normal click (force)", "dispatch", "js force"]:
+                    try:
+                        if method == "normal click (force)":
+                            await confirm_loc.click(force=True, timeout=10000)
+                        elif method == "dispatch":
+                            await confirm_loc.dispatch_event("click")
+                        else:
+                            await confirm_loc.evaluate("el => el.click()")
+                        clicked_confirm = True
+                        logger.info(f"第三階段確認按鈕點擊成功 ({method})")
+                        break
+                    except Exception as e:
+                        logger.warning(f"第三階段確認 {method} 失敗: {str(e)[:80]}...")
 
-            # 第二階段點擊：完全複製第一階段的三段式邏輯（更穩）
-            clicked_final = False
-            for method in ["normal click (force)", "dispatch", "js force"]:
-                try:
-                    if method == "normal click (force)":
-                        await final_loc.click(force=True, timeout=12000)
-                    elif method == "dispatch":
-                        await final_loc.dispatch_event("click")
-                    else:
-                        await final_loc.evaluate("el => el.click()")
-                    clicked_final = True
-                    logger.info(f"第二階段點擊成功 ({method}) - 綠色按鈕已觸發！")
-                    break
-                except Exception as e:
-                    logger.warning(f"第二階段 {method} 失敗: {str(e)[:100]}...")
+                if not clicked_confirm:
+                    logger.warning("確認彈窗點擊失敗，嘗試 JS 強制...")
+                    await confirm_loc.evaluate("el => el.click()")
+            else:
+                logger.warning("未找到確認彈窗，系統可能自動處理或無需確認")
 
-            if not clicked_final:
-                # 最終保險：JS 強制雙事件點擊
-                try:
-                    await final_loc.evaluate(
-                        "el => { "
-                        "el.click(); "
-                        "el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true})); "
-                        "}"
-                    )
-                    logger.info("第二階段最終 JS 強制點擊成功！")
-                    clicked_final = True
-                except Exception as e:
-                    logger.error(f"第二階段 JS 強制失敗: {str(e)}")
-                    raise Exception("第二階段所有點擊方式失敗")
+            # 等待成功訊息（放寬條件 + 延長到90秒）
+            logger.info("等待續期成功訊息出現...")
+            success_locator = panel.locator(
+                "text=延長しました, text=期限延長しました, text=延長完了, "
+                "text=更新しました, text=更新完了, text=完了しました, "
+                "text=成功, text=成功しました"
+            )
+            try:
+                await success_locator.wait_for(state="visible", timeout=90000)
+                logger.info("續期成功訊息出現！")
+            except PlaywrightTimeout:
+                all_success = await panel.locator("text=延長, text=完了, text=更新, text=成功").all_inner_texts()
+                logger.error(f"成功訊息未找到！頁面相關文字: {all_success}")
+                await self.shot("DEBUG_no_success_message")
+                raise Exception("第三階段：等待成功訊息超時")
 
-            await asyncio.sleep(5)
-
-            # 處理確認彈窗（極寬鬆）
-            confirm_loc = panel.locator(
-                "text=確認, text=はい, text=OK, text=確定, button:has-text('確認'), :text('確認')"
-            ).first
-            if await confirm_loc.is_visible(timeout=12000):
-                logger.info("發現確認彈窗 → 點擊")
-                await confirm_loc.click(force=True)
-
-            # 等待成功提示
-            await panel.locator(
-                "text=延長しました, text=更新しました, text=完了, text=成功, text=更新完了"
-            ).wait_for(state="visible", timeout=70000)
-
-            logger.info("🎉 續期全流程成功！")
+            logger.info("🎉 續期全流程（含第三階段）成功！")
             self.renewal_status = "Success"
-            await self.shot("success_final")
+            await self.shot("success_all_stages")
             return True
 
         except Exception as e:
