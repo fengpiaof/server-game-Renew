@@ -127,6 +127,7 @@ class XServerGamesRenewal:
             logger.error(self.error_message, exc_info=True)
             return False
 
+    # ── 登錄 & 進入管理面板 ──────────────────────────────────────────────
     async def login(self) -> bool:
         try:
             await self.page.goto("https://secure.xserver.ne.jp/xapanel/login/xmgame/")
@@ -181,12 +182,12 @@ class XServerGamesRenewal:
                 await self.shot("04_click_failure")
                 return False
 
-            # ========== 關鍵修改：驗證方式變更 ==========
+            # 關鍵修改：改用元素存在來驗證是否進入管理頁面（而非URL）
             logger.info("✅ 點擊操作已執行！現在驗證是否成功進入管理頁面...")
             try:
-                # 不再等待URL，而是等待新頁面上的標誌性元素出現
-                landmark_element = self.page.locator("text=アップグレード・期限延長")
-                await landmark_element.wait_for(state="visible", timeout=30000)
+                await self.page.locator("text=アップグレード・期限延長").wait_for(
+                    state="visible", timeout=30000
+                )
                 logger.info("🎉 驗證成功！已在頁面上找到'アップグレード・期限延長'，確認進入管理面板！")
                 await self.shot("05_panel_success")
                 return True
@@ -202,17 +203,11 @@ class XServerGamesRenewal:
             await self.shot("error_login_critical")
             return False
 
+    # ── 獲取剩餘時間 ─────────────────────────────────────────────────────
     async def get_remaining_time(self) -> bool:
         try:
-            # 這裡原本有 self.panel_frame 但前面並未定義，應為程式Bug
-            # 暫時註解，建議根據實際情況修正（可能應改用 self.page）
-            # if not self.panel_frame:
-            #     self.error_message = "邏輯錯誤：執行時間獲取時未找到有效的遊戲面板 Iframe。"
-            #     logger.error(self.error_message)
-            #     return False
-
             logger.info("正在管理面板內部採用最終的「簡單包含」策略獲取時間...")
-            await asyncio.sleep(3)  # 簡單的人為延遲替代 human_like_delay
+            await asyncio.sleep(3)  # 簡單的人為延遲
             await self.shot("07_before_get_time")
 
             time_section_locator = self.page.locator("*:has-text('残り'):has-text('時間')").first
@@ -238,72 +233,70 @@ class XServerGamesRenewal:
             await self.shot("error_get_time")
             return False
 
-        async def extend_contract(self) -> bool:
+    # ── 執行續期 ─────────────────────────────────────────────────────────
+    async def extend_contract(self) -> bool:
         try:
-            # 再次确保我们拥有Iframe的上下文
-            if not self.panel_frame:
-                self.error_message = "逻辑错误：执行续期时未找到有效的游戏面板 Iframe。"
-                logger.error(self.error_message)
-                return False
+            # 注意：目前程式中 self.panel_frame 從未被賦值，建議在此處修正
+            # 目前暫時使用 self.page 代替（根據實際頁面結構再調整）
+            panel = self.page  # ← 臨時替代，應根據實際情況改為正確的 frame
 
-            logger.info("🔄 正在管理面板 (Iframe) 内部采用“终极点击策略”开始续期...")
-            await self.human_like_delay() # 在续期前，模拟人类的停顿
+            logger.info("🔄 正在管理面板內部採用「終極點擊策略」開始續期...")
+            await asyncio.sleep(1.5)  # 簡單替代 human_like_delay
 
-            # 关键修复：采用多种点击方法，确保能“穿透”任何阻碍
-            extend_button = self.panel_frame.locator("button:has-text('アップグレード・期限延長')")
+            extend_button = panel.locator("button:has-text('アップグレード・期限延長')")
             clicked = False
 
+            # 策略1：dispatch_event
             try:
-                # 策略一：尝试低级别的 dispatch_event，这能绕过很多检查
-                logger.info("  - [策略1/2] 尝试 dispatch_event('click')...")
+                logger.info("  - [策略1/2] 嘗試 dispatch_event('click')...")
                 await extend_button.wait_for(state="visible", timeout=10000)
                 await extend_button.dispatch_event('click')
                 clicked = True
                 logger.info("  - ✅ dispatch_event('click') 成功。")
             except Exception as e:
-                logger.warning(f"  - [策略1/2] dispatch_event('click') 失败: {e}")
-                
-                # 策略二：如果上面失败，使用最终极的JavaScript点击
+                logger.warning(f"  - [策略1/2] dispatch_event('click') 失敗: {e}")
+
+                # 策略2：JavaScript 強制點擊
                 try:
-                    logger.info("  - [策略2/2] 尝试最终的 JavaScript 点击...")
+                    logger.info("  - [策略2/2] 嘗試最終的 JavaScript 點擊...")
                     await extend_button.evaluate("el => el.click()")
                     clicked = True
-                    logger.info("  - ✅ JavaScript 点击成功。")
+                    logger.info("  - ✅ JavaScript 點擊成功。")
                 except Exception as js_e:
-                    logger.error(f"  - [策略2/2] 所有点击策略均失败: {js_e}")
-                    raise js_e # 抛出异常，让外层捕获
+                    logger.error(f"  - [策略2/2] 所有點擊策略均失敗: {js_e}")
+                    raise
 
             if not clicked:
-                self.error_message = "所有点击策略均未能成功点击续期按钮。"
-                raise Exception(self.error_message)
+                raise Exception("所有點擊策略均未能成功點擊續期按鈕")
 
-            await self.human_like_delay(2, 4) # 点击后等待可能的对话框
+            await asyncio.sleep(2.5)  # 等待可能的彈窗
 
-            # 处理可能出现的确认对话框
-            confirm_button = self.panel_frame.locator(
+            # 處理確認對話框
+            confirm_button = panel.locator(
                 "div.modal-content button:has-text('確認'), "
                 "div.modal-content input:has-text('確認')"
             ).first
-            
+
             if await confirm_button.is_visible(timeout=5000):
-                logger.info("发现确认对话框，正在点击确认...")
+                logger.info("發現確認對話框，正在點擊確認...")
                 await confirm_button.click()
 
-            # 等待成功消息
-            await self.panel_frame.locator("text=延長しました").wait_for(state="visible", timeout=30000)
+            # 等待成功提示
+            await panel.locator("text=延長しました").wait_for(state="visible", timeout=30000)
 
-            logger.info("🎉 续期成功！")
+            logger.info("🎉 續期成功！")
             self.renewal_status = "Success"
             await self.shot("04_extend_success")
             return True
+
         except Exception as e:
-            self.error_message = f"续期操作失败: {e}"
+            self.error_message = f"續期操作失敗: {e}"
             self.renewal_status = "Failed"
             logger.error(self.error_message, exc_info=True)
             await self.shot("error_extend")
             return False
 
-
+    # ── 主流程 ───────────────────────────────────────────────────────────
     async def run(self):
         try:
             logger.info("=" * 60)
