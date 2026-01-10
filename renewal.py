@@ -235,9 +235,9 @@ class XServerGamesRenewal:
 
     # ── 執行續期 ─────────────────────────────────────────────────────────
     async def extend_contract(self) -> bool:
-        """嘗試在遊戲管理面板中執行續期操作（兩階段點擊）"""
+        """嘗試在遊戲管理面板中執行續期操作（兩階段點擊 + 特征元素驗證）"""
         try:
-            panel = self.page
+            panel = self.page  # 使用 page 作為操作上下文
 
             # 第一階段：點擊入口「アップグレード・期限延長」
             logger.info("🔄 第一階段：搜尋並點擊入口按鈕...")
@@ -250,6 +250,7 @@ class XServerGamesRenewal:
             await entry_loc.wait_for(state="visible", timeout=15000)
 
             # 三段式點擊入口
+            clicked_entry = False
             for method in ["normal click", "dispatch", "js force"]:
                 try:
                     if method == "normal click":
@@ -258,33 +259,53 @@ class XServerGamesRenewal:
                         await entry_loc.dispatch_event("click")
                     else:
                         await entry_loc.evaluate("el => el.click()")
+                    clicked_entry = True
                     logger.info(f"第一階段入口點擊成功 ({method})")
                     break
                 except Exception as e:
-                    logger.warning(f"第一階段 {method} 失敗: {str(e)[:80]}")
+                    logger.warning(f"第一階段 {method} 失敗: {str(e)[:80]}...")
 
-            await asyncio.sleep(4)  # 等待頁面載入
+            if not clicked_entry:
+                raise Exception("第一階段入口點擊失敗")
 
-            # 確認進入續期頁面
-            await panel.locator("text=期限延長する, text=無料サーバー期限延長").wait_for(
-                state="visible", timeout=30000
-            )
-            logger.info("成功進入續期頁面！")
+            # 關鍵：像 login 方法一樣，用特征元素驗證是否進入最終續期頁面
+            logger.info("✅ 第一階段點擊完成，正在驗證是否進入續期頁面...")
+            try:
+                # 使用最終頁面最明顯的特征元素（根據截圖）
+                await panel.locator(
+                    "text=無料サーバー期限延長, text=期限延長する, text=期限延長"
+                ).wait_for(state="visible", timeout=30000)
 
-            # 第二階段：點擊綠色「期限延長する」按鈕
+                logger.info("🎉 驗證成功！已在頁面上找到『無料サーバー期限延長』或『期限延長する』，確認進入最終續期頁面！")
+                await self.shot("08_final_page_success")
+            except PlaywrightTimeout:
+                self.error_message = "第一階段點擊後，未在頁面上找到續期頁面特征元素，判定進入失敗。"
+                logger.error(self.error_message)
+                await self.shot("09_final_page_validation_failed")
+                raise Exception(self.error_message)
+
+            # 第二階段：點擊真正的綠色「期限延長する」按鈕
             logger.info("🔄 第二階段：搜尋並點擊最終『期限延長する』按鈕...")
             final_button = panel.locator(":text('期限延長する')").first
 
+            # 如果嚴格匹配失敗，放寬 locator
             if not await final_button.is_visible(timeout=10000):
-                # 放寬 locator 再試一次
-                final_button = panel.locator("button:text('期限延長'), a:text('期限延長'), [class*='btn']:text('期限延長')").first
-                if not await final_button.is_visible(timeout=5000):
-                    raise Exception("找不到最終綠色按鈕 '期限延長する'")
+                final_button = panel.locator(
+                    "text=期限延長する, button:text('期限延長'), [class*='btn']:text('期限延長'), "
+                    "text=期限延長"
+                ).first
+
+            if not await final_button.is_visible(timeout=15000):
+                all_related = await panel.locator("text=期限, text=延長, text=する").all_inner_texts()
+                logger.error(f"最終按鈕未找到！頁面相關文字: {all_related}")
+                await self.shot("DEBUG_no_final_button")
+                raise Exception("第二階段：找不到最終綠色按鈕 '期限延長する'")
 
             await final_button.scroll_into_view_if_needed()  # 確保滾動到右下角
-            await final_button.wait_for(state="visible", timeout=15000)
+            await final_button.wait_for(state="visible", timeout=20000)
 
             # 三段式點擊最終按鈕
+            clicked_final = False
             for method in ["normal click", "dispatch", "js force"]:
                 try:
                     if method == "normal click":
@@ -293,23 +314,29 @@ class XServerGamesRenewal:
                         await final_button.dispatch_event("click")
                     else:
                         await final_button.evaluate("el => el.click()")
+                    clicked_final = True
                     logger.info(f"第二階段最終按鈕點擊成功 ({method})")
                     break
                 except Exception as e:
-                    logger.warning(f"第二階段 {method} 失敗: {str(e)[:80]}")
+                    logger.warning(f"第二階段 {method} 失敗: {str(e)[:80]}...")
 
-            await asyncio.sleep(3)
+            if not clicked_final:
+                raise Exception("第二階段最終按鈕點擊失敗")
+
+            await asyncio.sleep(4)
 
             # 處理可能的確認彈窗
-            confirm = panel.locator("button:text('確認'), button:text('はい'), :text('確認')").first
-            if await confirm.is_visible(timeout=8000):
+            confirm = panel.locator(
+                "button:text('確認'), button:text('はい'), :text('確認'), :text('OK')"
+            ).first
+            if await confirm.is_visible(timeout=10000):
                 await confirm.click(force=True)
                 logger.info("已點擊確認彈窗")
 
-            # 等待成功提示
-            await panel.locator("text=延長しました, text=更新しました, text=完了").wait_for(
-                state="visible", timeout=45000
-            )
+            # 等待最終成功提示
+            await panel.locator(
+                "text=延長しました, text=更新しました, text=完了, text=成功"
+            ).wait_for(state="visible", timeout=60000)
 
             logger.info("🎉 續期全流程成功！")
             self.renewal_status = "Success"
