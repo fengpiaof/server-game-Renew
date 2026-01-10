@@ -275,71 +275,77 @@ class XServerGamesRenewal:
             await self.shot("08_after_first_click")  # 拍攝進入頁面截圖，便於確認
 
             # 第二階段：直接搜尋並點擊最終綠色「期限延長する」按鈕
-            logger.info("🔄 第二階段：搜尋並點擊最終『期限延長する』按鈕...")
-            final_button = panel.locator(":text('期限延長する')").first
+# 第二階段：強化搜尋並點擊綠色「期限を延長する」按鈕（完全複製第一階段點擊邏輯）
+            logger.info("🔄 第二階段：強化搜尋並點擊綠色『期限を延長する』按鈕...")
 
-            # 如果嚴格匹配失敗，放寬 locator
-            if not await final_button.is_visible(timeout=15000):
-                logger.warning("嚴格 locator 未命中，嘗試放寬...")
-                final_button = panel.locator(
-                    "text=期限延長する, text=期限延長, button:text('期限延長'), "
-                    "[class*='btn']:text('期限延長'), [class*='button']:text('期限延長')"
-                ).first
+            # 第二階段 locator（正確文字 + 多層放寬）
+            final_selectors = [
+                ":text('期限を延長する')",                          # 正確完整文字（最優先）
+                "text=期限を延長する",
+                ":text('期限を延長')",                               # 部分匹配
+                "button:has-text('期限を延長'), a:has-text('期限を延長')",
+                "[class*='btn']:has-text('期限'), [class*='button']:has-text('延長')",
+                "[class*='success'], [class*='primary'], [class*='green']",  # 綠色樣式
+            ]
 
-            if not await final_button.is_visible(timeout=20000):
-                # 診斷：列出頁面所有 "期限" 相關文字
-                all_related = await panel.locator("text=期限, text=延長, text=する").all_inner_texts()
-                logger.error(f"最終按鈕未找到！頁面相關文字: {all_related}")
-                await self.shot("DEBUG_no_final_button")
-                raise Exception("第二階段：找不到最終綠色按鈕 '期限延長する'")
-
-            await final_button.scroll_into_view_if_needed()  # 確保滾到右下角
-            await final_button.wait_for(state="visible", timeout=20000)
-
-            # 三段式點擊最終按鈕
-            clicked_final = False
-            for method in ["normal click", "dispatch", "js force"]:
+            final_loc = None
+            for sel in final_selectors:
+                loc = panel.locator(sel).first
                 try:
-                    if method == "normal click":
-                        await final_button.click(force=True, timeout=10000)
+                    if await loc.is_visible(timeout=10000):
+                        final_loc = loc
+                        logger.info(f"★ 第二階段命中 selector: {sel}")
+                        break
+                except:
+                    continue
+
+            if not final_loc:
+                # 兜底：任何最後一個可見 button
+                logger.warning("所有 selector 失敗，使用兜底：頁面最後一個可見 button")
+                final_loc = panel.locator("button:visible, [role='button']:visible").last
+                if not await final_loc.is_visible(timeout=8000):
+                    all_buttons = await panel.locator("button, [role='button']").all_inner_texts()
+                    logger.error(f"兜底失敗！頁面 button 文字: {all_buttons}")
+                    await self.shot("DEBUG_no_final_button")
+                    raise Exception("第二階段：找不到任何可點按鈕")
+
+            # 強化：強制滾動 + 等待可見（與第一階段完全一致）
+            await final_loc.scroll_into_view_if_needed()
+            await asyncio.sleep(2)  # 滾動後緩衝
+            await final_loc.wait_for(state="visible", timeout=20000)
+
+            # 第二階段點擊：完全複製第一階段的三段式邏輯（更穩）
+            clicked_final = False
+            for method in ["normal click (force)", "dispatch", "js force"]:
+                try:
+                    if method == "normal click (force)":
+                        await final_loc.click(force=True, timeout=12000)
                     elif method == "dispatch":
-                        await final_button.dispatch_event("click")
+                        await final_loc.dispatch_event("click")
                     else:
-                        await final_button.evaluate("el => el.click()")
+                        await final_loc.evaluate("el => el.click()")
                     clicked_final = True
-                    logger.info(f"第二階段最終按鈕點擊成功 ({method})")
+                    logger.info(f"第二階段點擊成功 ({method}) - 綠色按鈕已觸發！")
                     break
                 except Exception as e:
-                    logger.warning(f"第二階段 {method} 失敗: {str(e)[:80]}...")
+                    logger.warning(f"第二階段 {method} 失敗: {str(e)[:100]}...")
 
             if not clicked_final:
-                raise Exception("第二階段最終按鈕點擊失敗")
+                # 最終保險：JS 強制雙事件點擊
+                try:
+                    await final_loc.evaluate(
+                        "el => { "
+                        "el.click(); "
+                        "el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true})); "
+                        "}"
+                    )
+                    logger.info("第二階段最終 JS 強制點擊成功！")
+                    clicked_final = True
+                except Exception as e:
+                    logger.error(f"第二階段 JS 強制失敗: {str(e)}")
+                    raise Exception("第二階段所有點擊方式失敗")
 
-            await asyncio.sleep(4)
-
-            # 處理可能的確認彈窗
-            confirm = panel.locator(
-                "button:text('確認'), button:text('はい'), :text('確認'), :text('OK')"
-            ).first
-            if await confirm.is_visible(timeout=10000):
-                await confirm.click(force=True)
-                logger.info("已點擊確認彈窗")
-
-            # 等待最終成功提示
-            await panel.locator(
-                "text=延長しました, text=更新しました, text=完了, text=成功"
-            ).wait_for(state="visible", timeout=60000)
-
-            logger.info("🎉 續期全流程成功！")
-            self.renewal_status = "Success"
-            await self.shot("success_final")
-            return True
-
-        except Exception as e:
-            self.error_message = f"續期失敗: {str(e)}"
-            logger.error(self.error_message, exc_info=True)
-            await self.shot("error_extend_final")
-            return False
+            await asyncio.sleep(5)
 
     # ── 主流程 ───────────────────────────────────────────────────────────
     async def run(self):
