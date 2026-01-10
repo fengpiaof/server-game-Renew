@@ -2,7 +2,7 @@ name: XServer GAMEs Renew
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # UTC 时间每6小时运行一次
+    - cron: '0 */16 * * *'  # UTC 时间每6小时运行一次
   workflow_dispatch:
 
 jobs:
