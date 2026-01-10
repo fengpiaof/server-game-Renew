@@ -235,21 +235,20 @@ class XServerGamesRenewal:
 
     # ── 執行續期 ─────────────────────────────────────────────────────────
     async def extend_contract(self) -> bool:
-        """嘗試在遊戲管理面板中執行續期操作（兩階段點擊 + 特征元素驗證）"""
+        """
+        完全基于您提供的代码，仅修正“验证进入第二阶段”的定位器。
+        """
         try:
-            panel = self.page  # 使用 page 作為操作上下文
+            panel = self.page  # 遵照您的指示，保持此行不变
 
-            # 第一階段：點擊入口「アップグレード・期限延長」
+            # --- 您的“第一阶段”逻辑，保持不变 ---
             logger.info("🔄 第一階段：搜尋並點擊入口按鈕...")
             entry_loc = panel.locator(":text('アップグレード・期限延長')").first
-
             if not await entry_loc.is_visible(timeout=8000):
                 raise Exception("找不到入口按鈕 'アップグレード・期限延長'")
-
             await entry_loc.scroll_into_view_if_needed()
             await entry_loc.wait_for(state="visible", timeout=15000)
-
-            # 三段式點擊入口
+            
             clicked_entry = False
             for method in ["normal click", "dispatch", "js force"]:
                 try:
@@ -264,23 +263,24 @@ class XServerGamesRenewal:
                     break
                 except Exception as e:
                     logger.warning(f"第一階段 {method} 失敗: {str(e)[:80]}...")
-
             if not clicked_entry:
                 raise Exception("第一階段入口點擊失敗")
 
-            # 關鍵：像 login 方法一樣，用特征元素驗證是否進入最終續期頁面
-            logger.info("✅ 第一階段點擊完成，正在驗證是否進入續期頁面...")
+            # ========== 唯一的、精准的修正 ==========
+            logger.info("✅ 第一階段點擊完成，正在使用“终极标志”驗證是否進入續期頁面...")
             try:
-                # 使用最終頁面最明顯的特征元素（根據截圖）
-                await panel.locator(
-                    "text=無料サーバー期限延長, text=期限延長する, text=期限延長"
-                ).wait_for(state="visible", timeout=30000)
+                # 这个定位器会寻找一个class为"section"的div，它必须同时包含"無料サーバー期限延長"的标题
+                # 和一个表格(<table>)。这是从您的截图中得到的最稳定、最可靠的结构。
+                final_page_landmark = panel.locator(
+                    "div.section:has(div.title:has-text('無料サーバー期限延長')):has(table)"
+                ).first
 
-                logger.info("🎉 驗證成功！已在頁面上找到『無料サーバー期限延長』或『期限延長する』，確認進入最終續期頁面！")
-                await self.shot("08_final_page_success")
-            except PlaywrightTimeout:
-                self.error_message = "第一階段點擊後，未在頁面上找到續期頁面特征元素，判定進入失敗。"
-                logger.error(self.error_message)
+                await final_page_landmark.wait_for(state="visible", timeout=30000)
+                logger.info("🎉 驗證成功！已在頁面上找到包含標題和表格的特征區域，確認進入最終續期頁面！")
+                await self.shot("08_final_page_validated")
+            except Exception as e:
+                self.error_message = f"第一階段點擊後，未能找到续期页面的“终极标志”，判定進入失敗: {e}"
+                logger.error(self.error_message, exc_info=True)
                 await self.shot("09_final_page_validation_failed")
                 raise Exception(self.error_message)
 
