@@ -234,55 +234,104 @@ class XServerGamesRenewal:
             return False
 
     # ── 執行續期 ─────────────────────────────────────────────────────────
-    async def extend_contract(self) -> bool:
-        try:
-            # 关键修正：我们不再重新寻找Iframe，而是直接、无条件地使用login函数成功后留下的 self.panel_frame
-            if not hasattr(self, 'panel_frame') or not self.panel_frame:
-                self.error_message = "逻辑断裂：login函数未能成功设置panel_frame。"
-                logger.error(self.error_message)
-                return False
+async def extend_contract(self) -> bool:
+    try:
+        panel = self.page  # 目前確定用 page
 
-            logger.info("🔄 正在已验证的管理面板 (Iframe) 内部，直接开始续期流程...")
-            await self.human_like_delay() # 在续期前，模拟人类的停顿
-            
-            # 直接在已有的、正确的Iframe上下文中，执行终极点击策略
-            extend_button = self.panel_frame.locator("button:has-text('アップグレード・期限延長')")
-            
+        logger.info("🔄 開始終極搜尋『アップグレード・期限延長』元素...")
+
+        # 擴大搜尋範圍的多組 selector（優先級由高到低）
+        possible_selectors = [
+            # 精準文字（允許前後空格/換行）
+            ":text('アップグレード・期限延長')",
+            ":text('アップグレード ・ 期限延長')",
+            ":text('期限延長')",  # 很多只顯示後半
+
+            # 常見的按鈕樣式
+            "button:has-text('アップグレード'), button:has-text('期限延長')",
+            "a:has-text('アップグレード・期限延長')",
+            "a:has-text('期限延長')",
+            "[class*='btn']:has-text('アップグレード'), [class*='button']:has-text('アップグレード')",
+            "[role='button']:has-text('期限延長')",
+
+            # 最寬鬆兜底（任何包含這段文字的可點元素）
+            "[class*='upgrade'], [class*='extend'], [class*='renew']:has-text('期限延長')",
+        ]
+
+        extend_loc = None
+        found_selector = None
+
+        for sel in possible_selectors:
+            loc = panel.locator(sel).first
             try:
-                # 尝试我们已知最强大的点击方法
-                logger.info("  - 尝试使用 dispatch_event('click') 点击续期按钮...")
-                await extend_button.dispatch_event('click')
-                logger.info("  - ✅ dispatch_event 点击成功。")
-            except Exception as e1:
-                logger.warning(f"  - dispatch_event 点击失败: {e1}，尝试 JavaScript 点击...")
-                try:
-                    await extend_button.evaluate("el => el.click()")
-                    logger.info("  - ✅ JavaScript 点击成功。")
-                except Exception as e2:
-                    self.error_message = f"所有点击策略均失败: {e2}"
-                    raise Exception(self.error_message)
+                if await loc.is_visible(timeout=5000):
+                    extend_loc = loc
+                    found_selector = sel
+                    logger.info(f"★ 命中 selector: {sel}")
+                    break
+            except:
+                continue
 
-            await self.human_like_delay(2, 4) # 点击后等待可能的对话框
+        if not extend_loc:
+            # 最終保險：列印所有包含「期限延長」的元素文字
+            all_matching = await panel.locator(":text('期限延長')").all_inner_texts()
+            logger.error(f"找不到任何元素！但頁面有這些含『期限延長』的文字: {all_matching}")
+            await self.shot("DEBUG_no_button_found")
+            raise Exception("無法定位到任何『アップグレード・期限延長』相關元素")
 
-            # 在同一个Iframe上下文中处理确认对话框
-            confirm_button = self.panel_frame.locator("div.modal-content button:has-text('確認'), div.modal-content input:has-text('確認')").first
-            if await confirm_button.is_visible(timeout=5000):
-                logger.info("发现确认对话框，正在点击确认...")
-                await confirm_button.click()
-            
-            # 在同一个Iframe上下文中等待成功消息
-            await self.panel_frame.locator("text=延長しました").wait_for(state="visible", timeout=30000)
-            
-            logger.info("🎉🎉🎉 续期成功！我们终于完成了！ 🎉🎉🎉")
-            self.renewal_status = "Success"
-            await self.shot("FINAL_SUCCESS")
-            return True
-        except Exception as e:
-            self.error_message = f"续期操作最终失败: {e}"
-            self.renewal_status = "Failed"
-            logger.error(self.error_message, exc_info=True)
-            await self.shot("FINAL_ERROR")
-            return False
+        # 找到後的處理
+        logger.info(f"元素已找到，使用 selector: {found_selector}")
+        await extend_loc.scroll_into_view_if_needed()
+        await extend_loc.wait_for(state="visible", timeout=15000)
+        await extend_loc.wait_for(state="enabled", timeout=10000)
+
+        # 三段式點擊（最強組合）
+        clicked = False
+        for attempt, method in enumerate(["normal click", "dispatch", "js force"], 1):
+            try:
+                if attempt == 1:
+                    await extend_loc.click(timeout=10000, force=True)
+                elif attempt == 2:
+                    await extend_loc.dispatch_event("click")
+                else:
+                    await extend_loc.evaluate("el => { el.click(); el.dispatchEvent(new MouseEvent('click', {bubbles: true})); }")
+                clicked = True
+                logger.info(f"點擊成功！使用 {method}")
+                break
+            except Exception as e:
+                logger.warning(f"嘗試 {attempt}/3 ({method}) 失敗: {str(e)[:100]}")
+
+        if not clicked:
+            raise Exception("三種點擊方式全部失敗")
+
+        await asyncio.sleep(3)  # 等待彈窗
+
+        # 後續確認彈窗邏輯（保持原樣，但也改用 panel）
+        confirm_loc = panel.locator(
+            "div.modal-content button:has-text('確認'), "
+            "div.modal-content :text('確認')"
+        ).first
+
+        if await confirm_loc.is_visible(timeout=8000):
+            logger.info("發現確認彈窗 → 點擊")
+            await confirm_loc.click(force=True)
+
+        # 等待成功文字（放寬一點）
+        await panel.locator("text=延長しました, text=更新しました").wait_for(
+            state="visible", timeout=40000
+        )
+
+        logger.info("🎉 續期成功！")
+        self.renewal_status = "Success"
+        await self.shot("04_extend_success")
+        return True
+
+    except Exception as e:
+        self.error_message = f"續期失敗: {str(e)}"
+        self.renewal_status = "Failed"
+        logger.error(self.error_message, exc_info=True)
+        await self.shot("error_extend_final")
+        return False
 
     # ── 主流程 ───────────────────────────────────────────────────────────
     async def run(self):
