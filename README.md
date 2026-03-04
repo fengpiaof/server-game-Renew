@@ -12,7 +12,7 @@ XServer VPS 自动续期脚本（Playwright 自动化 + OCR 验证码识别）
 
 🔐 自动登录 XServer 面板
 
-📅 自动读取 VPS 利用期限
+📅 自动 VPS 利用期限
 
 🤖 自动判断是否已到可续期日（到期前 1 天即可续期）
 
